@@ -6,9 +6,7 @@ A lightweight indicator addon for **Discipline Priests** that predicts the proba
 
 ## How it works
 
-**Proc detection** — After each Penance cast, VoidShieldHelper checks whether the Power Word: Shield action button icon has changed to the Void Shield variant. This classifies the cast as a proc, a non-proc, or unknown (shield was already active).
-
-**Prediction** — Void Shield follows a deck mechanic: each group of 3 Penance casts contains exactly one proc. VoidShieldHelper models this with three parallel phase trackers (one per possible cycle offset). Each tracker independently maintains a probability distribution over the current group; invalid trackers are pruned as the history grows. The displayed probabilities are averaged across all still-valid trackers.
+Void Shield follows a deck mechanic: each group of 3 Penance casts contains exactly one proc. VoidShieldHelper models this with three parallel phase trackers (one per possible cycle offset). Each tracker independently maintains a probability distribution over the current group; invalid trackers are pruned as the history grows. The displayed probabilities are averaged across all still-valid trackers.
 
 ### Forecast lights
 
@@ -21,13 +19,6 @@ A lightweight indicator addon for **Discipline Priests** that predicts the proba
 Colour scale: **cyan** (100% — will proc) → **green** (≥ 60%) → **yellow** (≥ 30%) → **orange** (< 30%) → **red** (0% — won't proc) → **grey** (not enough data)
 
 A smooth gradient mode is available as an alternative to discrete colour steps.
-
----
-
-## Requirements
-
-- Discipline Priest with the **Void Shield** talent
-- No other addons required
 
 ---
 
@@ -52,7 +43,7 @@ Frames appear automatically when logged in as a Discipline Priest with Penance o
 
 ## Acknowledgements
 
-The proc-detection approach was inspired by [Void Shield Proc Tracker](https://www.curseforge.com/wow/addons/void-shield-proc-tracker). VoidShieldHelper is a standalone addon and does not require it.
+Inspired by [Void Shield Proc Tracker](https://www.curseforge.com/wow/addons/void-shield-proc-tracker).
 
 ---
 
