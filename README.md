@@ -6,17 +6,21 @@ A lightweight indicator addon for **Discipline Priests** that predicts the proba
 
 ## How it works
 
-Void Shield procs follow a phase-based distribution across Penance casts. VoidShieldHelper tracks this pattern with a Phase-State Filter and displays three colour-coded lights:
+**Proc detection** — After each Penance cast, VoidShieldHelper checks whether the Power Word: Shield action button icon has changed to the Void Shield variant. This classifies the cast as a proc, a non-proc, or unknown (shield was already active).
+
+**Prediction** — Void Shield follows a deck mechanic: each group of 3 Penance casts contains exactly one proc. VoidShieldHelper models this with three parallel phase trackers (one per possible cycle offset). Each tracker independently maintains a probability distribution over the current group; invalid trackers are pruned as the history grows. The displayed probabilities are averaged across all still-valid trackers.
+
+### Forecast lights
 
 | Light | Meaning |
 |-------|---------|
-| **LAST** | Result of your most recent Penance (cyan = proc, red = no proc) |
-| **N+1** | Probability that your *next* Penance will proc |
-| **N+2** | Probability that the Penance *after that* will proc |
+| **LAST** | Result of your most recent Penance: cyan = proc, red = no proc, yellow = unknown |
+| **N+1** | Probability your *next* Penance will proc |
+| **N+2** | Probability the Penance *after that* will proc |
 
-Colour scale: **cyan** (100%) → **green** (≥ 60%) → **yellow** (30–60%) → **orange** (< 30%) → **red** (0%) → **grey** (no data)
+Colour scale: **cyan** (100% — will proc) → **green** (≥ 60%) → **yellow** (≥ 30%) → **orange** (< 30%) → **red** (0% — won't proc) → **grey** (not enough data)
 
-A smooth gradient mode is available as an alternative to the discrete colour steps.
+A smooth gradient mode is available as an alternative to discrete colour steps.
 
 ---
 
@@ -24,8 +28,6 @@ A smooth gradient mode is available as an alternative to the discrete colour ste
 
 - Discipline Priest with the **Void Shield** talent
 - No other addons required
-
-> **Inspiration:** This addon was inspired by [VoidShieldProc](https://www.curseforge.com/wow/addons/voidshieldproc). VoidShieldHelper uses its own proc detection and does not require VoidShieldProc to be installed.
 
 ---
 
@@ -39,12 +41,18 @@ Frames appear automatically when logged in as a Discipline Priest with Penance o
 
 ## Options
 
-- Show/hide the debug window (history, phase state, raw probabilities)
+- Show/hide the debug window (cast history, phase state, raw probabilities)
 - Lock frames against accidental dragging
 - Per-frame scale (0.5× – 2.0×)
 - Smooth gradient vs. discrete probability colours
 - Per-frame background/border colour, size, and LibSharedMedia texture
 - Light square size (main and secondary), spacing, border colour and size
+
+---
+
+## Acknowledgements
+
+The proc-detection approach was inspired by [Void Shield Proc Tracker](https://www.curseforge.com/wow/addons/void-shield-proc-tracker). VoidShieldHelper is a standalone addon and does not require it.
 
 ---
 
