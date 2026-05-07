@@ -1,0 +1,5 @@
+package-as: VoidShieldHelper
+
+ignore:
+  - .github
+  - README.md

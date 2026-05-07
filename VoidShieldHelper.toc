@@ -1,8 +1,9 @@
 ## Interface: 120005
-## Version: 0.0.1
+## Version: @project-version@
 ## Title: VoidShieldHelper
 ## Notes: Tracks Penance casts and Void Shield procs for Disc Priest
 ## Author: CeilingPanda
+## X-Curse-Project-ID: 1535987
 ## SavedVariables: VoidShieldHelperDB
 
 VoidShieldHelper.lua
