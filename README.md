@@ -28,6 +28,8 @@ A smooth gradient mode is available as an alternative to discrete colour steps.
 
 Frames appear automatically when logged in as a Discipline Priest with Penance on your action bar. All frames are draggable; positions are saved per character.
 
+> **Action bar requirement:** Proc detection works by watching the Power Word: Shield button icon on your action bars. **Power Word: Shield must be placed directly from the spellbook onto an action bar** — a macro that casts PW:S will not work. If you use macros for PW:S, enable an extra action bar and place the raw spell in any empty slot there; it does not need to be visible or on your main bars.
+
 ---
 
 ## Options
