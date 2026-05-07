@@ -43,7 +43,8 @@ Frames appear automatically when logged in as a Discipline Priest with Penance o
 
 ## Acknowledgements
 
-Inspired by [Void Shield Proc Tracker](https://www.curseforge.com/wow/addons/void-shield-proc-tracker).
+- Proc detection approach inspired by [Void Shield Proc Tracker](https://www.curseforge.com/wow/addons/void-shield-proc-tracker).
+- Void Shield deck mechanic explained in [this video](https://www.youtube.com/watch?v=X1Od3Ovp2i0).
 
 ---
 
