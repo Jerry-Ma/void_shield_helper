@@ -21,7 +21,7 @@ local S = {
     panel   = {0.12, 0.12, 0.12, 1.00},
     elem    = {0.14, 0.14, 0.14, 1.00},
     border  = {0.32, 0.32, 0.32, 1.00},
-    accent  = {0.45, 0.55, 1.00, 1.00},
+    accent  = {0.90, 0.72, 0.28, 1.00},  -- amber-gold
     text    = {0.85, 0.85, 0.85},
     dim     = {0.45, 0.45, 0.45},
     hl      = {0.22, 0.22, 0.22, 1.00},
@@ -435,15 +435,21 @@ local function makeTextureDropdown(parent, label, mediaType, yOff, getter, sette
     return c
 end
 
--- ─── Options panel ────────────────────────────────────────────────────────────
+-- ─── Options panel ───────────────────────────────────────────────────────────
+-- Tabbed layout: sidebar on the left, content area on the right.
+-- Tabs: General | Forecast | Lights | Debug
 
 local optionsFrame = nil
 
 local function buildOptionsFrame()
-    local PANEL_H = 620
+    local SIDEBAR_W = 75
+    local TOTAL_W   = SIDEBAR_W + PANEL_W  -- 375
+    local PANEL_H   = 420
+    local TITLE_H   = 26
+    local TAB_H     = 30
 
     local f = CreateFrame("Frame", "VoidShieldHelperOptionsFrame", UIParent, "BackdropTemplate")
-    f:SetSize(PANEL_W, PANEL_H)
+    f:SetSize(TOTAL_W, PANEL_H)
     f:SetPoint("CENTER")
     f:SetFrameStrata("DIALOG")
     f:SetBackdrop({
@@ -453,22 +459,20 @@ local function buildOptionsFrame()
     })
     f:SetBackdropColor(S.bg[1], S.bg[2], S.bg[3], S.bg[4])
     f:SetBackdropBorderColor(S.border[1], S.border[2], S.border[3], 1)
-    f:EnableMouse(true)
-    f:SetMovable(true)
-    f:RegisterForDrag("LeftButton")
+    f:EnableMouse(true); f:SetMovable(true); f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", function(self) self:StartMoving() end)
     f:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
 
     -- Title bar
     local tBar = f:CreateTexture(nil, "ARTWORK")
-    tBar:SetHeight(26)
+    tBar:SetHeight(TITLE_H)
     tBar:SetPoint("TOPLEFT", 1, -1); tBar:SetPoint("TOPRIGHT", -1, -1)
     tBar:SetColorTexture(S.panel[1], S.panel[2], S.panel[3], 1)
 
     local tTxt = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     tTxt:SetPoint("LEFT", tBar, "LEFT", 10, 0)
     tTxt:SetPoint("TOP",  tBar, "TOP",    0, -7)
-    tTxt:SetText("VoidShieldHelper — Options")
+    tTxt:SetText("VoidShieldHelper \xe2\x80\x94 Options")
     tTxt:SetTextColor(S.text[1], S.text[2], S.text[3])
 
     -- Close button
@@ -481,100 +485,275 @@ local function buildOptionsFrame()
     closeBtn:SetScript("OnLeave", function() cX:SetTextColor(S.dim[1], S.dim[2], S.dim[3]) end)
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
+    -- Sidebar background: plain texture, no BackdropTemplate (avoids white artefacts)
+    local sideBarBg = f:CreateTexture(nil, "BACKGROUND")
+    sideBarBg:SetPoint("TOPLEFT",    f, "TOPLEFT",    1, -(TITLE_H + 1))
+    sideBarBg:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 1,  1)
+    sideBarBg:SetWidth(SIDEBAR_W - 1)
+    sideBarBg:SetColorTexture(S.panel[1], S.panel[2], S.panel[3], 1)
+
+    -- Invisible frame so tab buttons have a proper parent
+    local sideBar = CreateFrame("Frame", nil, f)
+    sideBar:SetPoint("TOPLEFT",    f, "TOPLEFT",    1, -(TITLE_H + 1))
+    sideBar:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 1,  1)
+    sideBar:SetWidth(SIDEBAR_W - 1)
+
+    -- Vertical divider
+    local divLine = f:CreateTexture(nil, "ARTWORK")
+    divLine:SetWidth(1)
+    divLine:SetPoint("TOPLEFT",    f, "TOPLEFT",    SIDEBAR_W, -(TITLE_H + 1))
+    divLine:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", SIDEBAR_W,  1)
+    divLine:SetColorTexture(S.border[1], S.border[2], S.border[3], 1)
+
+    -- Content area (right of divider)
+    local contentArea = CreateFrame("Frame", nil, f)
+    contentArea:SetPoint("TOPLEFT",     f, "TOPLEFT",     SIDEBAR_W + 1, -(TITLE_H + 1))
+    contentArea:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
+
     local db      = VoidShieldHelperDB
     local widgets = {}
+    local pages   = {}
+    local tabs    = {}
+    local activeTab = nil
 
-    -- ── Section: Frames ───────────────────────────────────────────────────────
-    sectionHeader(f, "Frames", -34)
+    local function selectTab(idx)
+        if activeTab == idx then return end
+        activeTab = idx
+        for i, page in ipairs(pages) do
+            if i == idx then page:Show() else page:Hide() end
+        end
+        for i, btn in ipairs(tabs) do
+            if i == idx then
+                btn._bg:SetColorTexture(S.accent[1]*0.18, S.accent[2]*0.18, S.accent[3]*0.18, 1)
+                btn._accent:Show()
+                btn._lbl:SetTextColor(S.accent[1], S.accent[2], S.accent[3])
+            else
+                btn._bg:SetColorTexture(0, 0, 0, 0)
+                btn._accent:Hide()
+                btn._lbl:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+            end
+        end
+    end
 
-    local wDbg = makeCheckbox(f, "Show Debug Window", -52,
+    local function addTab(name)
+        local idx = #tabs + 1
+        local btn = CreateFrame("Button", nil, sideBar)
+        btn:SetSize(SIDEBAR_W - 1, TAB_H)
+        btn:SetPoint("TOPLEFT", sideBar, "TOPLEFT", 0, -((idx - 1) * TAB_H) - 4)
+
+        local bg = btn:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints(); bg:SetColorTexture(0, 0, 0, 0)
+        btn._bg = bg
+
+        -- Left accent bar (shown when active)
+        local accent = btn:CreateTexture(nil, "ARTWORK")
+        accent:SetWidth(3)
+        accent:SetPoint("TOPLEFT"); accent:SetPoint("BOTTOMLEFT")
+        accent:SetColorTexture(S.accent[1], S.accent[2], S.accent[3], 1)
+        accent:Hide()
+        btn._accent = accent
+
+        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("CENTER", 2, 0)
+        lbl:SetText(name)
+        lbl:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+        btn._lbl = lbl
+
+        local hl = btn:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(S.hl[1], S.hl[2], S.hl[3], 0.5)
+
+        local page = CreateFrame("Frame", nil, contentArea)
+        page:SetAllPoints(contentArea)
+        page:Hide()
+
+        tabs[idx]  = btn
+        pages[idx] = page
+        btn:SetScript("OnClick", function() selectTab(idx) end)
+        return page
+    end
+
+    -- ── Tab 1: General ────────────────────────────────────────────────────────
+    local pGen = addTab("General")
+
+    sectionHeader(pGen, "Display", -10)
+
+    local wDbg = makeCheckbox(pGen, "Show Debug Window", -28,
         function() return not (db.hideDebug or false) end,
         function(v) db.hideDebug = not v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDbg)
 
-    local wLck = makeCheckbox(f, "Lock Frames (disable dragging)", -78,
+    local wLck = makeCheckbox(pGen, "Lock Frames (disable dragging)", -54,
         function() return db.locked or false end,
         function(v) db.locked = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wLck)
 
-    local wFS = makeSlider(f, "Forecast Scale", 0.5, 2.0, 0.05, -108,
+    sectionHeader(pGen, "Scale", -86)
+
+    local wFS = makeSlider(pGen, "Forecast Scale", 0.5, 2.0, 0.05, -104,
         function() return db.forecastScale or 1.0 end,
         function(v) db.forecastScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFS)
 
-    local wDS = makeSlider(f, "Debug Scale", 0.5, 2.0, 0.05, -160,
+    local wDS = makeSlider(pGen, "Debug Scale", 0.5, 2.0, 0.05, -156,
         function() return db.debugScale or 1.0 end,
         function(v) db.debugScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDS)
 
-    -- ── Forecast Frame appearance ──────────────────────────────────────
-    sectionHeader(f, "Forecast Frame", -216)
+    sectionHeader(pGen, "Colours", -212)
 
-    local fBgLbl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    fBgLbl:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -234)
+    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -230,
+        function() return db.smoothColors or false end,
+        function(v) db.smoothColors = v
+            if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end end)
+    table.insert(widgets, wSmooth)
+
+    -- Probability colour legend
+    local LEGEND = {
+        { r=0.0, g=0.9, b=0.9, label="100%  - will proc" },
+        { r=0.1, g=0.9, b=0.1, label=">=60%  - likely" },
+        { r=0.9, g=0.9, b=0.1, label=">=30%  - possible" },
+        { r=1.0, g=0.5, b=0.0, label="< 30%  - unlikely" },
+        { r=0.9, g=0.2, b=0.2, label="   0%  - won't proc" },
+        { r=0.4, g=0.4, b=0.4, label="  n/a  - no data yet" },
+    }
+    local ROW_H = 16
+    local SW_SZ = 10
+    local yLeg  = -258
+    for _, row in ipairs(LEGEND) do
+        local sw = pGen:CreateTexture(nil, "ARTWORK")
+        sw:SetSize(SW_SZ, SW_SZ)
+        sw:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, yLeg + (SW_SZ - ROW_H) / 2)
+        sw:SetColorTexture(row.r, row.g, row.b, 1)
+
+        local lbl = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("LEFT", pGen, "TOPLEFT", 10 + SW_SZ + 6, yLeg - ROW_H / 2)
+        lbl:SetText(row.label)
+        lbl:SetTextColor(S.text[1], S.text[2], S.text[3])
+
+        yLeg = yLeg - ROW_H
+    end
+
+    -- ── Tab 2: Forecast Frame ─────────────────────────────────────────────────
+    local pFcast = addTab("Forecast")
+
+    sectionHeader(pFcast, "Background & Border", -10)
+
+    local fBgLbl = pFcast:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fBgLbl:SetPoint("TOPLEFT", pFcast, "TOPLEFT", 10, -28)
     fBgLbl:SetText("BG Color"); fBgLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    local fBrdLbl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    fBrdLbl:SetPoint("TOPLEFT", f, "TOPLEFT", 155, -234)
+    local fBrdLbl = pFcast:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    fBrdLbl:SetPoint("TOPLEFT", pFcast, "TOPLEFT", 155, -28)
     fBrdLbl:SetText("Border Color"); fBrdLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    local fBgSw = makeColorSwatch(f, "", 10, -252, "bgColorR", "bgColorG", "bgColorB", "bgColorA")
+    local fBgSw = makeColorSwatch(pFcast, "", 10, -46, "bgColorR", "bgColorG", "bgColorB", "bgColorA")
     table.insert(widgets, fBgSw)
 
-    local fBrdSw = makeColorSwatch(f, "", 155, -252, "borderColorR", "borderColorG", "borderColorB", "borderColorA")
+    local fBrdSw = makeColorSwatch(pFcast, "", 155, -46, "borderColorR", "borderColorG", "borderColorB", "borderColorA")
     table.insert(widgets, fBrdSw)
 
-    local wFBrdSz = makeSlider(f, "Border Size  (0=hidden)", 0, 4, 1, -286,
+    local wFBrdSz = makeSlider(pFcast, "Border Size  (0=hidden)", 0, 4, 1, -80,
         function() return db.borderSize or 1 end,
         function(v) db.borderSize = math.floor(v+0.5)
             if VSH.applySettings then VSH.applySettings() end end, "%d")
     table.insert(widgets, wFBrdSz)
 
-    local wFBgTex = makeTextureDropdown(f, "Background Texture", "statusbar", -338,
+    sectionHeader(pFcast, "Texture", -136)
+
+    local wFBgTex = makeTextureDropdown(pFcast, "Background Texture", "statusbar", -154,
         function() return db.backdropBg or "" end,
         function(name) db.backdropBg = name
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFBgTex)
 
-    local wFLtTex = makeTextureDropdown(f, "Light Texture (squares)", "statusbar", -390,
+    -- ── Tab 3: Lights ─────────────────────────────────────────────────────────
+    local pLights = addTab("Lights")
+
+    sectionHeader(pLights, "Texture", -10)
+
+    local wFLtTex = makeTextureDropdown(pLights, "Light Texture (squares)", "statusbar", -28,
         function() return db.lightTexName or "" end,
         function(name) db.lightTexName = name
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFLtTex)
 
-    -- ── Debug Frame appearance ──────────────────────────────────────────
-    sectionHeader(f, "Debug Frame", -442)
+    sectionHeader(pLights, "Size & Spacing", -84)
 
-    local dBgLbl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    dBgLbl:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -460)
+    local wLSzMain = makeSlider(pLights, "Main Light Size", 8, 48, 1, -102,
+        function() return db.lightSizeMain or 24 end,
+        function(v) db.lightSizeMain = math.floor(v+0.5)
+            if VSH.rebuildLights then VSH.rebuildLights() end end, "%d")
+    table.insert(widgets, wLSzMain)
+
+    local wLSzSmall = makeSlider(pLights, "Secondary Light Size", 6, 40, 1, -154,
+        function() return db.lightSizeSmall or 16 end,
+        function(v) db.lightSizeSmall = math.floor(v+0.5)
+            if VSH.rebuildLights then VSH.rebuildLights() end end, "%d")
+    table.insert(widgets, wLSzSmall)
+
+    local wLGap = makeSlider(pLights, "Light Spacing", 2, 40, 1, -206,
+        function() return db.lightGap or 14 end,
+        function(v) db.lightGap = math.floor(v+0.5)
+            if VSH.rebuildLights then VSH.rebuildLights() end end, "%d")
+    table.insert(widgets, wLGap)
+
+    sectionHeader(pLights, "Border", -260)
+
+    local lBrdLbl = pLights:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lBrdLbl:SetPoint("TOPLEFT", pLights, "TOPLEFT", 10, -278)
+    lBrdLbl:SetText("Border Color"); lBrdLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
+
+    local wLBrdSw = makeColorSwatch(pLights, "", 10, -296, "lightBorderR", "lightBorderG", "lightBorderB", "lightBorderA")
+    table.insert(widgets, wLBrdSw)
+
+    local wLBrdSz = makeSlider(pLights, "Border Size  (0=hidden)", 0, 4, 1, -330,
+        function() return db.lightBorderSize or 1 end,
+        function(v) db.lightBorderSize = math.floor(v+0.5)
+            if VSH.applySettings then VSH.applySettings() end end, "%d")
+    table.insert(widgets, wLBrdSz)
+
+    -- ── Tab 4: Debug Frame ────────────────────────────────────────────────────
+    local pDebug = addTab("Debug")
+
+    sectionHeader(pDebug, "Background & Border", -10)
+
+    local dBgLbl = pDebug:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    dBgLbl:SetPoint("TOPLEFT", pDebug, "TOPLEFT", 10, -28)
     dBgLbl:SetText("BG Color"); dBgLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    local dBrdLbl = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    dBrdLbl:SetPoint("TOPLEFT", f, "TOPLEFT", 155, -460)
+    local dBrdLbl = pDebug:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    dBrdLbl:SetPoint("TOPLEFT", pDebug, "TOPLEFT", 155, -28)
     dBrdLbl:SetText("Border Color"); dBrdLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    local dBgSw = makeColorSwatch(f, "", 10, -478, "debugBgR", "debugBgG", "debugBgB", "debugBgA")
+    local dBgSw = makeColorSwatch(pDebug, "", 10, -46, "debugBgR", "debugBgG", "debugBgB", "debugBgA")
     table.insert(widgets, dBgSw)
 
-    local dBrdSw = makeColorSwatch(f, "", 155, -478, "debugBorderR", "debugBorderG", "debugBorderB", "debugBorderA")
+    local dBrdSw = makeColorSwatch(pDebug, "", 155, -46, "debugBorderR", "debugBorderG", "debugBorderB", "debugBorderA")
     table.insert(widgets, dBrdSw)
 
-    local wDBrdSz = makeSlider(f, "Border Size  (0=hidden)", 0, 4, 1, -512,
+    local wDBrdSz = makeSlider(pDebug, "Border Size  (0=hidden)", 0, 4, 1, -80,
         function() return db.debugBorderSize or 1 end,
         function(v) db.debugBorderSize = math.floor(v+0.5)
             if VSH.applySettings then VSH.applySettings() end end, "%d")
     table.insert(widgets, wDBrdSz)
 
-    local wDBgTex = makeTextureDropdown(f, "Background Texture", "statusbar", -564,
+    sectionHeader(pDebug, "Texture", -136)
+
+    local wDBgTex = makeTextureDropdown(pDebug, "Background Texture", "statusbar", -154,
         function() return db.debugBgTex or "" end,
         function(name) db.debugBgTex = name
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDBgTex)
 
+    -- Hint
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
     hint:SetText("/vsh  to toggle")
     hint:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+
+    -- Activate first tab
+    selectTab(1)
 
     f.refresh = function()
         for _, w in ipairs(widgets) do

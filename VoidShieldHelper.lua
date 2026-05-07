@@ -381,27 +381,74 @@ end
 -- Three lights: [last cast result] [N+1 probability] [N+2 probability]
 -- N+1 is the primary indicator (full size); LAST and N+2 are smaller.
 -- Lights are bottom-aligned.
+-- Default sizes/gap; overridden by DB at runtime.
+local LIGHT_SIZE_MAIN_DEFAULT  = 24
+local LIGHT_SIZE_SMALL_DEFAULT = 16
+local LIGHT_GAP_DEFAULT        = 14
 
-local LIGHT_SIZE_MAIN  = 24   -- N+1 (next cast)
-local LIGHT_SIZE_SMALL = 16   -- LAST and N+2
-local LIGHT_GAP        = 14
+-- Rebuild (or initially build) the three light frames inside forecastFrame.
+-- Tears down existing lights first so it can be called on settings change.
+local function rebuildLights(f)
+    local db    = VoidShieldHelperDB or {}
+    local szMain  = db.lightSizeMain  or LIGHT_SIZE_MAIN_DEFAULT
+    local szSmall = db.lightSizeSmall or LIGHT_SIZE_SMALL_DEFAULT
+    local gap     = db.lightGap       or LIGHT_GAP_DEFAULT
+
+    local sizes = { szSmall, szMain, szSmall }
+
+    -- Tear down existing lights
+    if f.lights then
+        for _, light in ipairs(f.lights) do
+            light:Hide()
+            light:SetParent(nil)
+        end
+    end
+    f.lights = {}
+
+    local totalW = szSmall + gap + szMain + gap + szSmall
+    local padding = 8   -- horizontal inset from each edge
+    local frameW  = totalW + padding * 2
+    local frameH  = szMain + 16
+    f:SetSize(frameW, frameH)
+
+    -- All lights bottom-aligned; shared bottom edge at -8 - szMain from frame top
+    local bottomY    = -(8 + szMain)
+    local topOffsets = { bottomY + szSmall, -8, bottomY + szSmall }
+    local xOffsets   = { padding,
+                         padding + szSmall + gap,
+                         padding + szSmall + gap + szMain + gap }
+
+    -- Resolve light texture
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    local lightTexPath = nil
+    if LSM and db.lightTexName and db.lightTexName ~= "" then
+        lightTexPath = LSM:Fetch("statusbar", db.lightTexName)
+    end
+
+    local lbs = db.lightBorderSize or 1
+    local lba = (lbs > 0) and (db.lightBorderA or 1) or 0
+    local lbr = db.lightBorderR or 0
+    local lbg = db.lightBorderG or 0
+    local lbb = db.lightBorderB or 0
+
+    for i = 1, 3 do
+        local light = CreateFrame("Frame", nil, f, "BackdropTemplate")
+        light:SetSize(sizes[i], sizes[i])
+        light:SetPoint("TOPLEFT", f, "TOPLEFT", xOffsets[i], topOffsets[i])
+        light:SetBackdrop({
+            bgFile   = lightTexPath or "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = math.max(1, lbs),
+            tile = true, tileSize = 16,
+        })
+        light:SetBackdropColor(0.3, 0.3, 0.3, 1)
+        light:SetBackdropBorderColor(lbr, lbg, lbb, lba)
+        f.lights[i] = light
+    end
+end
 
 local function createForecastFrame()
-    local sizes   = { LIGHT_SIZE_SMALL, LIGHT_SIZE_MAIN, LIGHT_SIZE_SMALL }
-    -- total width of all three lights + gaps between them
-    local totalLightsW = sizes[1] + LIGHT_GAP + sizes[2] + LIGHT_GAP + sizes[3]  -- 16+14+24+14+16 = 84
-    local frameW  = totalLightsW + 24   -- 108
-    local frameH  = LIGHT_SIZE_MAIN + 16
-
-    -- Y top-edge offsets so all lights align on their bottom edges
-    -- N+1 bottom at -8-MAIN; LAST/N+2 bottom at same y, so top = bottom + SMALL
-    local bottomY = -(8 + LIGHT_SIZE_MAIN)  -- shared bottom edge (relative to frame top)
-    local topOffsets = { bottomY + LIGHT_SIZE_SMALL, -8, bottomY + LIGHT_SIZE_SMALL }
-    -- startX = (frameW - totalLightsW) / 2 = 12
-    local xOffsets = { 12, 12 + sizes[1] + LIGHT_GAP, 12 + sizes[1] + LIGHT_GAP + sizes[2] + LIGHT_GAP }
-
     local f = CreateFrame("Frame", "VoidShieldHelperForecastFrame", UIParent, "BackdropTemplate")
-    f:SetSize(frameW, frameH)
 
     if VoidShieldHelperDB.forecastPos then
         local p = VoidShieldHelperDB.forecastPos
@@ -428,46 +475,57 @@ local function createForecastFrame()
         VoidShieldHelperDB.forecastPos = { point = point, relPoint = relPoint, x = x, y = y }
     end)
 
-    f.lights = {}
-    f.glows  = {}
-
-    for i = 1, 3 do
-        local sz   = sizes[i]
-        local xOff = xOffsets[i]
-        local yOff = topOffsets[i]
-
-        -- Light square (ARTWORK)
-        local light = f:CreateTexture(nil, "ARTWORK")
-        light:SetSize(sz, sz)
-        light:SetPoint("TOPLEFT", f, "TOPLEFT", xOff, yOff)
-        light:SetColorTexture(0.3, 0.3, 0.3, 1)
-        f.lights[i] = light
-
-        -- placeholder glow slot (unused but keeps index parity with applyLight)
-        f.glows[i] = nil
-    end
+    rebuildLights(f)
 
     f:Show()
     return f
+end
+
+-- Colour stops for the gradient (exclusive of the 0 and 1 special endpoints).
+-- Each stop: { threshold 0-1, r, g, b }
+local PROB_STOPS = {
+    { 0.00, 1.0, 0.5, 0.0 },   -- orange  (just above 0%)
+    { 0.30, 0.9, 0.9, 0.1 },   -- yellow
+    { 0.60, 0.1, 0.9, 0.1 },   -- green
+    { 1.00, 0.1, 0.9, 0.1 },   -- green  (just below 100%, not cyan)
+}
+
+local function lerpColor(r1, g1, b1, r2, g2, b2, t)
+    return r1 + (r2 - r1) * t, g1 + (g2 - g1) * t, b1 + (b2 - b1) * t
 end
 
 local function probColor(prob)
     if prob == nil then return 0.4, 0.4, 0.4 end
     if prob >= 1.0  then return 0.0, 0.9, 0.9 end   -- cyan: guaranteed proc
     if prob <= 0.0  then return 0.9, 0.2, 0.2 end   -- red: guaranteed no-proc
+
+    local db = VoidShieldHelperDB
+    if db and db.smoothColors then
+        -- Smooth gradient between stops (0 and 1 endpoints excluded above)
+        local s = PROB_STOPS
+        for i = 1, #s - 1 do
+            local lo, hi = s[i], s[i + 1]
+            if prob >= lo[1] and prob <= hi[1] then
+                local span = hi[1] - lo[1]
+                local t = (span > 0) and (prob - lo[1]) / span or 0
+                return lerpColor(lo[2], lo[3], lo[4], hi[2], hi[3], hi[4], t)
+            end
+        end
+        local last = s[#s]
+        return last[2], last[3], last[4]
+    end
+
+    -- Discrete mode (default)
     local pct = prob * 100
     if pct >= 60 then return 0.1, 0.9, 0.1          -- green
     elseif pct >= 30 then return 0.9, 0.9, 0.1       -- yellow
-    else return 1.0, 0.5, 0.0 end                    -- orange: low probability
+    else return 1.0, 0.5, 0.0 end                    -- orange
 end
 
 local function applyLight(light, r, g, b)
-    if light._useTex then
-        -- Texture set by applySettings — tint with vertex color
-        light:SetVertexColor(r, g, b, 1)
-    else
-        light:SetColorTexture(r, g, b, 1)
-    end
+    -- SetBackdropColor works for both solid color and texture modes:
+    -- with bgFile=WHITE8x8 it produces a solid colour; with a real texture it tints it.
+    light:SetBackdropColor(r, g, b, 1)
 end
 
 updateForecastDisplay = function()
@@ -774,27 +832,17 @@ local function applySettings()
             db.debugBorderR or 0.32, db.debugBorderG or 0.32, db.debugBorderB or 0.32, db.debugBorderA or 1)
     end
 
-    -- Light square texture
-    local lightTexPath = nil
-    if LSM and db.lightTexName and db.lightTexName ~= "" then
-        lightTexPath = LSM:Fetch("statusbar", db.lightTexName)
-    end
-    if forecastFrame and forecastFrame.lights then
-        for _, light in ipairs(forecastFrame.lights) do
-            if lightTexPath then
-                light:SetTexture(lightTexPath)
-                -- reset vertex color to white so the texture shows as-is
-                light:SetVertexColor(1, 1, 1, 1)
-                light._useTex = true
-            else
-                light:SetTexture(nil)
-                light._useTex = false
-            end
-        end
+    -- Light squares: rebuild to apply new sizes / gap / texture / border
+    if forecastFrame then
+        rebuildLights(forecastFrame)
+        -- Re-apply indicator colours after rebuild resets them
+        updateForecastDisplay()
     end
 end
 
-VSH.applySettings = function() applySettings() end
+VSH.applySettings         = function() applySettings() end
+VSH.updateForecastDisplay = function() updateForecastDisplay() end
+VSH.rebuildLights         = function() if forecastFrame then rebuildLights(forecastFrame); updateForecastDisplay() end end
 
 -- ─── Ticker ──────────────────────────────────────────────────────────────────
 
@@ -891,6 +939,15 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.debugBorderG    == nil then db.debugBorderG    = 0.32 end
         if db.debugBorderB    == nil then db.debugBorderB    = 0.32 end
         if db.debugBorderA    == nil then db.debugBorderA    = 1    end
+        if db.smoothColors      == nil then db.smoothColors      = false end
+        if db.lightBorderSize   == nil then db.lightBorderSize   = 1    end
+        if db.lightBorderR      == nil then db.lightBorderR      = 0    end
+        if db.lightBorderG      == nil then db.lightBorderG      = 0    end
+        if db.lightBorderB      == nil then db.lightBorderB      = 0    end
+        if db.lightBorderA      == nil then db.lightBorderA      = 1    end
+        if db.lightSizeMain     == nil then db.lightSizeMain     = 24   end
+        if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
+        if db.lightGap          == nil then db.lightGap          = 14   end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
