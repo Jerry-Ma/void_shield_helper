@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] - 2026-05-08
+
+### Detection
+- Added **"Prune offsets on zone entry"** option (General → Detection, on by default). When enabled, the two mid-block offset phases are discarded on `PLAYER_ENTERING_WORLD` instead of waiting for natural invalidation. The predictor converges to a single phase immediately, assuming the new instance starts at a clean deck-block boundary.
+
+---
+
 ## [1.1.0] - 2026-05-08
 
 ### Detection
