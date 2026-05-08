@@ -444,7 +444,7 @@ local optionsFrame = nil
 local function buildOptionsFrame()
     local SIDEBAR_W = 75
     local TOTAL_W   = SIDEBAR_W + PANEL_W  -- 375
-    local PANEL_H   = 420
+    local PANEL_H   = 460
     local TITLE_H   = 26
     local TAB_H     = 30
 
@@ -643,7 +643,7 @@ local function buildOptionsFrame()
     end
 
     -- ── Tab 2: Forecast Frame ─────────────────────────────────────────────────
-    local pFcast = addTab("Forecast")
+    local pFcast = addTab("Frame")
 
     sectionHeader(pFcast, "Background & Border", -10)
 
@@ -676,7 +676,7 @@ local function buildOptionsFrame()
     table.insert(widgets, wFBgTex)
 
     -- ── Tab 3: Lights ─────────────────────────────────────────────────────────
-    local pLights = addTab("Lights")
+    local pLights = addTab("Indicators")
 
     sectionHeader(pLights, "Texture", -10)
 
