@@ -5,7 +5,7 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs fired via UNIT_SPELLCAST_SUCCEEDED.
+-- Penance spell IDs detected via UNIT_SPELLCAST_START.
 -- Both IDs are tracked; a 2-second debounce prevents multi-bolt double-counting.
 local PENANCE_SPELL_IDS = {
     [47540] = true,  -- Penance
@@ -32,10 +32,10 @@ local ACTION_BUTTON_PREFIXES = {
     "MultiActionBar4Button",
 }
 
--- How long after a penance UNIT_SPELLCAST_SUCCEEDED we wait before reading the
+-- How long after UNIT_SPELLCAST_START we wait before reading the
 -- action-button texture to determine if a proc happened.
 local PROC_CHECK_DELAY  = 0.2   -- seconds
--- (No debounce needed: UNIT_SPELLCAST_START fires once per cast, not once per bolt.)
+-- (No debounce needed: proc detection is driven by UNIT_SPELLCAST_START.)
 -- How many penance results to keep in the rolling history.
 -- How many penance results to keep in the rolling log (purely for display).
 -- No game-mechanic reason to cap this; just controls memory used by the table.
@@ -205,7 +205,6 @@ local iterationsUntilSlotRefresh = 0
 
 local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visible
 
-local pendingCastStart         = false  -- true from UNIT_SPELLCAST_START until first SUCCEEDED
 local pendingCheck             = false  -- true while waiting for PROC_CHECK_DELAY
 local shieldActiveOnCast       = false  -- snapshot of shieldActive at penance cast
 
@@ -353,7 +352,10 @@ local function finishPendingCheck()
 end
 
 --- Called on UNIT_SPELLCAST_START for Penance.
--- Snapshots shield state *before* the cast lands.
+-- Snapshots shield state at cast start, then checks after a short delay.
+-- The icon changes as soon as the channel begins, so START is sufficient.
+-- An interrupted Penance never fires SUCCEEDED, so relying on SUCCEEDED would
+-- silently miss those casts.
 -- If a previous check is still pending (rapid recast), force-completes it first.
 --
 -- State machine:
@@ -367,19 +369,10 @@ local function onPenanceCastStart()
         finishPendingCheck()
     end
 
-    pendingCastStart   = true
     pollShieldState()
     shieldActiveOnCast = shieldActive
+    pendingCheck       = true
     updateDebugDisplay()
-end
-
---- Called on UNIT_SPELLCAST_SUCCEEDED for Penance.
--- Penance fires SUCCEEDED once per bolt; pendingCastStart ensures only the
--- first bolt triggers the check (natural replacement for PENANCE_DEBOUNCE).
-local function onPenanceCastSucceeded()
-    if not pendingCastStart then return end
-    pendingCastStart = false
-    pendingCheck     = true
 
     C_Timer.After(PROC_CHECK_DELAY, function()
         if not pendingCheck then return end
@@ -901,7 +894,6 @@ local function resetState()
     shieldActive               = false
     pendingCheck               = false
     shieldActiveOnCast         = false
-    lastPenanceTime            = 0
     watchSlot                  = nil
     iterationsUntilSlotRefresh = 0
 end
@@ -915,7 +907,6 @@ eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_START")
-eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -1004,12 +995,5 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             onPenanceCastStart()
         end
 
-    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if not isDiscPriest then return end
-        local unit, _, spellID = ...
-        if unit ~= "player" then return end
-        if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCastSucceeded()
-        end
     end
 end)
