@@ -1095,7 +1095,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
         if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
-        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false end
+        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = true  end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
