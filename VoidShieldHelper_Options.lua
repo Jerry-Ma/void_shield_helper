@@ -847,3 +847,26 @@ function VSH.toggleOptions()
     optionsFrame:Raise()
     if optionsFrame.refresh then optionsFrame.refresh() end
 end
+
+
+-- ── Blizzard Addon Options stub ────────────────────────────────────────────
+do
+    local stub = CreateFrame("Frame", "VoidShieldHelperBlizzardStub")
+
+    local t = stub:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    t:SetPoint("TOPLEFT", 16, -16)
+    t:SetText("VoidShieldHelper")
+
+    local d = stub:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    d:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -8)
+    d:SetText("Tracks Penance casts and Void Shield procs for Disc Priest.")
+
+    local btn = CreateFrame("Button", nil, stub, "UIPanelButtonTemplate")
+    btn:SetSize(200, 28)
+    btn:SetPoint("TOPLEFT", d, "BOTTOMLEFT", 0, -12)
+    btn:SetText("Open Options  (/vsh)")
+    btn:SetScript("OnClick", function() VSH.toggleOptions() end)
+
+    local cat = Settings.RegisterCanvasLayoutCategory(stub, "VoidShieldHelper")
+    Settings.RegisterAddOnCategory(cat)
+end
