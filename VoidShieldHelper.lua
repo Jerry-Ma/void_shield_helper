@@ -5,7 +5,8 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs detected via UNIT_SPELLCAST_START.
+-- Penance spell IDs detected via UNIT_SPELLCAST_SUCCEEDED (bolt IDs).
+-- UNIT_SPELLCAST_START is used only to snapshot the shield state before the channel.
 -- Both IDs are tracked; a 2-second debounce prevents multi-bolt double-counting.
 local PENANCE_SPELL_IDS = {
     [47540] = true,  -- Penance
@@ -35,7 +36,7 @@ local ACTION_BUTTON_PREFIXES = {
 -- How long after UNIT_SPELLCAST_START we wait before reading the
 -- action-button texture to determine if a proc happened.
 local PROC_CHECK_DELAY  = 0.2   -- seconds
--- (No debounce needed: proc detection is driven by UNIT_SPELLCAST_START.)
+-- (No debounce needed: pendingCastStart ensures only the first bolt SUCCEEDED counts.)
 -- How many penance results to keep in the rolling history.
 -- How many penance results to keep in the rolling log (purely for display).
 -- No game-mechanic reason to cap this; just controls memory used by the table.
@@ -205,6 +206,7 @@ local iterationsUntilSlotRefresh = 0
 
 local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visible
 
+local pendingCastStart         = false  -- true from UNIT_SPELLCAST_START until first bolt SUCCEEDED
 local pendingCheck             = false  -- true while waiting for PROC_CHECK_DELAY
 local shieldActiveOnCast       = false  -- snapshot of shieldActive at penance cast
 
@@ -892,6 +894,7 @@ local function resetState()
     predictor                  = DeckPredictor_new()
     predictorBreakCount        = 0
     shieldActive               = false
+    pendingCastStart           = false
     pendingCheck               = false
     shieldActiveOnCast         = false
     watchSlot                  = nil
@@ -907,6 +910,7 @@ eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_START")
+eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -993,6 +997,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if unit ~= "player" then return end
         if PENANCE_SPELL_IDS[spellID] then
             onPenanceCastStart()
+        end
+
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        if not isDiscPriest then return end
+        local unit, _, spellID = ...
+        if unit ~= "player" then return end
+        if PENANCE_SPELL_IDS[spellID] then
+            onPenanceCastSucceeded()
         end
 
     end
