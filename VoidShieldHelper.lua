@@ -96,7 +96,16 @@ end
 --- converges immediately instead of waiting for natural invalidation.
 local function DeckPredictor_pruneToOffset0(self)
     for i, p in ipairs(self.phases) do
-        if i ~= 1 then   -- phases[1] is offset=0
+        if i == 1 then
+            -- Reset offset-0 phase to a clean block start.
+            -- Without this, the stale slotsFilled/minSum/maxSum from the
+            -- previous run causes an impossible sequence on the first new
+            -- cast, triggering auto-recovery and INCONSISTENT warnings.
+            p.isValid     = true
+            p.minSum      = 0
+            p.maxSum      = 0
+            p.slotsFilled = 0
+        else
             p.isValid = false
         end
     end
