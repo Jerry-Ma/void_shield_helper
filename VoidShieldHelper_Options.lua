@@ -664,8 +664,9 @@ local function buildOptionsFrame()
         segs[i] = seg
     end
 
-    -- Threshold markers at 30% and 60%
-    for _, th in ipairs({ 0.30, 0.60 }) do
+    -- Threshold markers at 33% and 66%
+    local tLo, tHi = VSH.THRESH_LO, VSH.THRESH_HI
+    for _, th in ipairs({ tLo, tHi }) do
         local mark = pGen:CreateTexture(nil, "OVERLAY")
         mark:SetSize(1, BAR_H)
         mark:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + math.floor(th * BAR_W), barY2 - 1)
@@ -676,8 +677,8 @@ local function buildOptionsFrame()
     local axisY = barY2 - BAR_H - 2
     for _, ax in ipairs({
         { x = 10,                                 text = "0%"   },
-        { x = 10 + math.floor(BAR_W * 0.30) - 6, text = "30%"  },
-        { x = 10 + math.floor(BAR_W * 0.60) - 6, text = "60%"  },
+        { x = 10 + math.floor(BAR_W * tLo) - 6, text = string.format("%d%%", tLo * 100) },
+        { x = 10 + math.floor(BAR_W * tHi) - 6, text = string.format("%d%%", tHi * 100) },
         { x = 10 + BAR_W - 16,                    text = "100%" },
     }) do
         local al = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")

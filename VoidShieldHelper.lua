@@ -21,6 +21,10 @@ local PENANCE_SPELL_IDS = {
 local BASE_SLOT_TEXTURE = 135940
 local PROC_SLOT_TEXTURE = 7514191
 
+-- Discrete colour thresholds.  Orange [0, THRESH_LO), yellow [THRESH_LO, THRESH_HI), green [THRESH_HI, 1].
+local THRESH_LO = 0.33
+local THRESH_HI = 0.66
+
 -- Spell IDs for Power Word: Shield on the action bar (used to find the watch slot).
 local PW_SHIELD_SPELL_IDS = {
     [17]      = true,  -- Power Word: Shield (base)
@@ -522,14 +526,13 @@ end
 
 -- Colour stops for the smooth gradient.
 -- Each stop is anchored at the MID-POINT of the corresponding discrete colour
--- range, so the gradient shows the "pure" colour at the same probability where
--- discrete mode would show it.  Discrete ranges: orange [0,30%), yellow [30,60%),
--- green [60,100%] → midpoints 15%, 45%, 80%.
+-- range so the gradient shows the "pure" colour where discrete mode would.
+-- Midpoints are derived from THRESH_LO / THRESH_HI automatically.
 -- Each entry: { prob 0-1, r, g, b }
 local PROB_STOPS = {
-    { 0.15, 1.0, 0.5, 0.0 },   -- orange  (mid of 0–30% range)
-    { 0.45, 0.9, 0.9, 0.1 },   -- yellow  (mid of 30–60% range)
-    { 0.80, 0.1, 0.9, 0.1 },   -- green   (mid of 60–100% range)
+    { THRESH_LO / 2,                   1.0, 0.5, 0.0 },  -- orange  midpoint
+    { (THRESH_LO + THRESH_HI) / 2,     0.9, 0.9, 0.1 },  -- yellow  midpoint
+    { (THRESH_HI + 1.0) / 2,           0.1, 0.9, 0.1 },  -- green   midpoint
 }
 
 local function lerpColor(r1, g1, b1, r2, g2, b2, t)
@@ -561,10 +564,9 @@ local function probColor(prob)
     end
 
     -- Discrete mode (default)
-    local pct = prob * 100
-    if pct >= 60 then return 0.1, 0.9, 0.1          -- green
-    elseif pct >= 30 then return 0.9, 0.9, 0.1       -- yellow
-    else return 1.0, 0.5, 0.0 end                    -- orange
+    if prob >= THRESH_HI then return 0.1, 0.9, 0.1          -- green
+    elseif prob >= THRESH_LO then return 0.9, 0.9, 0.1       -- yellow
+    else return 1.0, 0.5, 0.0 end                           -- orange
 end
 
 local function applyLight(light, r, g, b)
@@ -904,6 +906,8 @@ end
 VSH.applySettings         = function() applySettings() end
 VSH.updateForecastDisplay = function() updateForecastDisplay() end
 VSH.rebuildLights         = function() if forecastFrame then rebuildLights(forecastFrame); updateForecastDisplay() end end
+VSH.THRESH_LO             = THRESH_LO
+VSH.THRESH_HI             = THRESH_HI
 VSH.probColor             = function(p) return probColor(p) end
 
 local logPopup = nil  -- shared popup for the debug log (opened from options)
