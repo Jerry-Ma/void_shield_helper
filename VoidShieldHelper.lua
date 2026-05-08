@@ -5,12 +5,10 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs detected via UNIT_SPELLCAST_SUCCEEDED (bolt IDs).
--- UNIT_SPELLCAST_START is used only to snapshot the shield state before the channel.
--- Both IDs are tracked; a 2-second debounce prevents multi-bolt double-counting.
+-- Penance spell IDs detected via UNIT_SPELLCAST_START / UNIT_SPELLCAST_SUCCEEDED.
 local PENANCE_SPELL_IDS = {
     [47540] = true,  -- Penance
-    [47666] = true,  -- Penance (alternate ID)
+    [47666] = true,  -- Penance (empowered / Dark Reprimand variant)
 }
 
 -- Power Word: Shield action-button textures.
@@ -43,6 +41,8 @@ local PROC_CHECK_DELAY  = 0.2   -- seconds
 local MAX_HISTORY         = 30
 -- How many of those entries to render in the debug frame (limited by frame height).
 local MAX_DISPLAY_HISTORY = 9
+-- How many raw event log entries to keep and display in the debug frame.
+local MAX_EVENT_LOG       = 8
 
 -- Result constants
 local RESULT_PROC     = "PROC"
@@ -212,6 +212,17 @@ local shieldActiveOnCast       = false  -- snapshot of shieldActive at penance c
 
 -- plain result strings (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first
 local penanceHistory           = {}
+-- raw event log for debugging: newest first, each entry is a string
+local eventLog                 = {}
+
+--- Prepend a string to the event log and trim to MAX_EVENT_LOG.
+local function logEvent(msg)
+    local t = string.format("%.2f", GetTime() % 1000)
+    table.insert(eventLog, 1, string.format("|cff888888[%s]|r %s", t, msg))
+    if #eventLog > MAX_EVENT_LOG then
+        eventLog[#eventLog] = nil
+    end
+end
 
 --- Returns nil if every complete block in history has at most 1 PROC (consistent),
 --- or a string describing the first offending block (inconsistent).
@@ -365,16 +376,27 @@ end
 --   Case 2: shield was ACTIVE   → cast → (any state)         → UNKNOWN
 --   Case 3: shield was INACTIVE → cast → shield still INACTIVE → NO_PROC
 local function onPenanceCastStart()
-    -- If we are still waiting for the previous cast's proc check, force it now
-    -- before overwriting shieldActiveOnCast with the new snapshot.
+    logEvent("|cffffff00START 47540|r shield=" .. (shieldActive and "|cff00ff00Y|r" or "|cffff4444N|r"))
     if pendingCheck then
+        logEvent("|cffff8800 ^ force-finishing previous check|r")
         finishPendingCheck()
     end
-
+    pendingCastStart   = true
     pollShieldState()
     shieldActiveOnCast = shieldActive
-    pendingCheck       = true
     updateDebugDisplay()
+end
+
+--- Called on UNIT_SPELLCAST_SUCCEEDED for Penance bolts.
+-- The first bolt triggers the 0.2s proc check; subsequent bolts are ignored
+-- via pendingCastStart. Interrupted casts never reach here.
+local function onPenanceCastSucceeded()
+    logEvent(string.format("SUCCEEDED pendingStart=%s pendingCheck=%s",
+        pendingCastStart and "Y" or "N",
+        pendingCheck     and "Y" or "N"))
+    if not pendingCastStart then return end
+    pendingCastStart = false
+    pendingCheck     = true
 
     C_Timer.After(PROC_CHECK_DELAY, function()
         if not pendingCheck then return end
@@ -568,7 +590,7 @@ local RESULT_COLOR = {
 
 local function createDebugFrame()
     local f = CreateFrame("Frame", "VoidShieldHelperDebugFrame", UIParent, "BackdropTemplate")
-    f:SetSize(240, 312)
+    f:SetSize(240, 480)
 
     if VoidShieldHelperDB.pos then
         local p = VoidShieldHelperDB.pos
@@ -652,8 +674,25 @@ local function createDebugFrame()
         line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -110 - (i * 18))
         line:SetWidth(212)
         line:SetJustifyH("LEFT")
-        line:SetText(string.format("#%d: —", i))
+        line:SetText(string.format("#%d: -", i))
         f.histLines[i] = line
+    end
+
+    -- Event log section header
+    local evtY = -110 - (MAX_DISPLAY_HISTORY * 18) - 12
+    local evtHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    evtHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, evtY)
+    evtHeader:SetText("Event log (newest first):")
+
+    -- Event log lines
+    f.evtLines = {}
+    for i = 1, MAX_EVENT_LOG do
+        local line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, evtY - (i * 16))
+        line:SetWidth(216)
+        line:SetJustifyH("LEFT")
+        line:SetText("")
+        f.evtLines[i] = line
     end
 
     f:Show()
@@ -673,7 +712,9 @@ updateDebugDisplay = function()
     end
 
     -- Pending indicator
-    if pendingCheck then
+    if pendingCastStart then
+        debugFrame.pendingLabel:SetText("|cffffff00waiting for SUCCEEDED...|r")
+    elseif pendingCheck then
         debugFrame.pendingLabel:SetText("|cffffff00waiting for texture check...|r")
     else
         debugFrame.pendingLabel:SetText("")
@@ -766,7 +807,14 @@ updateDebugDisplay = function()
             end
             debugFrame.histLines[i]:SetText(string.format("%s: %s%s|r", indexLabel, resultColor, result))
         else
-            debugFrame.histLines[i]:SetText(string.format("|cff888888#%d: —|r", i))
+            debugFrame.histLines[i]:SetText(string.format("|cff888888#%d: -|r", i))
+        end
+    end
+
+    -- Event log
+    if debugFrame.evtLines then
+        for i = 1, MAX_EVENT_LOG do
+            debugFrame.evtLines[i]:SetText(eventLog[i] or "")
         end
     end
 end
@@ -891,6 +939,7 @@ end
 --- Full state reset (instance transitions reset the shuffle deck).
 local function resetState()
     penanceHistory             = {}
+    eventLog                   = {}
     predictor                  = DeckPredictor_new()
     predictorBreakCount        = 0
     shieldActive               = false
