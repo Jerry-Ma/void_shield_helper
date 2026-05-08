@@ -699,6 +699,11 @@ local function createDebugFrame()
         f.histLines[i] = line
     end
 
+    -- Bottom hint
+    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
+    hint:SetText("|cff888888/vsh  to open options|r")
+
     f:Show()
     return f
 end
