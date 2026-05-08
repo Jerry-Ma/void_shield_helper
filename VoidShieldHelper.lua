@@ -699,77 +699,6 @@ local function createDebugFrame()
         f.histLines[i] = line
     end
 
-    -- Event log button
-    local logBtnY = -124 - (MAX_DISPLAY_HISTORY * 18) - 26
-    local logBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    logBtn:SetSize(220, 22)
-    logBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 10, logBtnY)
-    logBtn:SetText("Show Event Log (copy/paste)")
-    logBtn:SetScript("OnClick", function()
-        local lines = {}
-        lines[#lines+1] = "=== Penance history (newest first) ==="
-        for i = 1, #penanceHistory do
-            lines[#lines+1] = string.format("#%d: %s", i, penanceHistory[i])
-        end
-        lines[#lines+1] = ""
-        lines[#lines+1] = "=== Event log (newest first) ==="
-        for i = 1, #eventLog do
-            lines[#lines+1] = eventLog[i]
-        end
-        local text = table.concat(lines, "\n")
-
-        if not f.logPopup then
-            local pop = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
-            pop:SetSize(500, 400)
-            pop:SetPoint("CENTER")
-            pop:SetBackdrop({
-                bgFile   = "Interface\\Buttons\\WHITE8x8",
-                edgeFile = "Interface\\Buttons\\WHITE8x8",
-                edgeSize = 1, tile = true, tileSize = 16,
-            })
-            pop:SetBackdropColor(0, 0, 0, 0.92)
-            pop:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
-            pop:SetFrameStrata("DIALOG")
-            pop:EnableMouse(true)
-            pop:SetMovable(true)
-            pop:RegisterForDrag("LeftButton")
-            pop:SetScript("OnDragStart", function(self) self:StartMoving() end)
-            pop:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
-
-            local hdr = pop:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-            hdr:SetPoint("TOP", pop, "TOP", 0, -8)
-            hdr:SetText("Debug Log")
-
-            local hint = pop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            hint:SetPoint("TOP", pop, "TOP", 0, -26)
-            hint:SetText("|cff888888Ctrl-A to select all, Ctrl-C to copy|r")
-
-            local scroll = CreateFrame("ScrollFrame", nil, pop, "UIPanelScrollFrameTemplate")
-            scroll:SetPoint("TOPLEFT",  pop, "TOPLEFT",  10, -46)
-            scroll:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -30, 36)
-
-            local eb = CreateFrame("EditBox", nil, scroll)
-            eb:SetMultiLine(true)
-            eb:SetAutoFocus(false)
-            eb:SetFontObject("ChatFontNormal")
-            eb:SetWidth(scroll:GetWidth())
-            eb:SetScript("OnEscapePressed", function() pop:Hide() end)
-            scroll:SetScrollChild(eb)
-            pop.editBox = eb
-
-            local closeBtn = CreateFrame("Button", nil, pop, "UIPanelButtonTemplate")
-            closeBtn:SetSize(80, 22)
-            closeBtn:SetPoint("BOTTOM", pop, "BOTTOM", 0, 8)
-            closeBtn:SetText("Close")
-            closeBtn:SetScript("OnClick", function() pop:Hide() end)
-
-            f.logPopup = pop
-        end
-        f.logPopup.editBox:SetText(text)
-        f.logPopup.editBox:SetCursorPosition(0)
-        f.logPopup:Show()
-    end)
-
     f:Show()
     return f
 end
@@ -975,6 +904,73 @@ end
 VSH.applySettings         = function() applySettings() end
 VSH.updateForecastDisplay = function() updateForecastDisplay() end
 VSH.rebuildLights         = function() if forecastFrame then rebuildLights(forecastFrame); updateForecastDisplay() end end
+
+local logPopup = nil  -- shared popup for the debug log (opened from options)
+
+VSH.showDebugLog = function()
+    local lines = {}
+    lines[#lines+1] = "=== Penance history (newest first) ==="
+    for i = 1, #penanceHistory do
+        lines[#lines+1] = string.format("#%d: %s", i, penanceHistory[i])
+    end
+    lines[#lines+1] = ""
+    lines[#lines+1] = "=== Event log (newest first) ==="
+    for i = 1, #eventLog do
+        lines[#lines+1] = eventLog[i]
+    end
+    local text = table.concat(lines, "\n")
+
+    if not logPopup then
+        local pop = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        pop:SetSize(500, 400)
+        pop:SetPoint("CENTER")
+        pop:SetBackdrop({
+            bgFile   = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1, tile = true, tileSize = 16,
+        })
+        pop:SetBackdropColor(0, 0, 0, 0.92)
+        pop:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+        pop:SetFrameStrata("DIALOG")
+        pop:EnableMouse(true)
+        pop:SetMovable(true)
+        pop:RegisterForDrag("LeftButton")
+        pop:SetScript("OnDragStart", function(self) self:StartMoving() end)
+        pop:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
+
+        local hdr = pop:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        hdr:SetPoint("TOP", pop, "TOP", 0, -8)
+        hdr:SetText("Debug Log")
+
+        local hint = pop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        hint:SetPoint("TOP", pop, "TOP", 0, -26)
+        hint:SetText("|cff888888Ctrl-A to select all, Ctrl-C to copy|r")
+
+        local scroll = CreateFrame("ScrollFrame", nil, pop, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT",  pop, "TOPLEFT",  10, -46)
+        scroll:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -30, 36)
+
+        local eb = CreateFrame("EditBox", nil, scroll)
+        eb:SetMultiLine(true)
+        eb:SetAutoFocus(false)
+        eb:SetFontObject("ChatFontNormal")
+        eb:SetWidth(scroll:GetWidth())
+        eb:SetScript("OnEscapePressed", function() pop:Hide() end)
+        scroll:SetScrollChild(eb)
+        pop.editBox = eb
+
+        local closeBtn = CreateFrame("Button", nil, pop, "UIPanelButtonTemplate")
+        closeBtn:SetSize(80, 22)
+        closeBtn:SetPoint("BOTTOM", pop, "BOTTOM", 0, 8)
+        closeBtn:SetText("Close")
+        closeBtn:SetScript("OnClick", function() pop:Hide() end)
+
+        logPopup = pop
+    end
+    logPopup.editBox:SetText(text)
+    logPopup.editBox:SetCursorPosition(0)
+    logPopup:Show()
+end
 
 -- ─── Ticker ──────────────────────────────────────────────────────────────────
 

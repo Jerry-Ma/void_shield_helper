@@ -754,6 +754,16 @@ local function buildOptionsFrame()
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDBgTex)
 
+    sectionHeader(pDebug, "Diagnostics", -210)
+
+    local logBtn = CreateFrame("Button", nil, pDebug, "UIPanelButtonTemplate")
+    logBtn:SetSize(PANEL_W - 20, 22)
+    logBtn:SetPoint("TOPLEFT", pDebug, "TOPLEFT", 10, -228)
+    logBtn:SetText("Show Event Log (copy/paste)")
+    logBtn:SetScript("OnClick", function()
+        if VSH.showDebugLog then VSH.showDebugLog() end
+    end)
+
     -- Hint
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
