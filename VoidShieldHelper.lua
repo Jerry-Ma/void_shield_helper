@@ -5,19 +5,13 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs for mechanism A (UNIT_SPELLCAST_SUCCEEDED + 2s debounce).
--- UNCHANGED from v1.0 baseline.
+-- Penance spell IDs matched on UNIT_SPELLCAST_CHANNEL_START.
+-- 47757 is the canonical channel-start ID; the bolt IDs and empowered
+-- variant are included for completeness.
 local PENANCE_SPELL_IDS = {
-    [47540] = true,  -- Penance
-    [47666] = true,  -- Penance (alternate ID)
-}
-
--- Penance spell IDs for mechanism B (CH_START + SUCCEEDED comparison tracker).
--- Superset: includes the channel-start ID (47757) and healing-bolt ID (47750).
-local CH_PENANCE_SPELL_IDS = {
-    [47540] = true,  -- Penance bolt (SUCCEEDED, damage)
-    [47750] = true,  -- Penance bolt (SUCCEEDED, healing)
-    [47757] = true,  -- Penance channel (CHANNEL_START)
+    [47540] = true,  -- Penance bolt (damage)
+    [47750] = true,  -- Penance bolt (healing)
+    [47757] = true,  -- Penance channel start
     [47666] = true,  -- Penance (empowered / Dark Reprimand variant)
 }
 
@@ -41,17 +35,14 @@ local ACTION_BUTTON_PREFIXES = {
     "MultiActionBar4Button",
 }
 
--- How long after UNIT_SPELLCAST_SUCCEEDED (mech A) to read the proc texture.
-local PROC_CHECK_DELAY  = 0.2   -- seconds (mech A, fixed)
--- Mech B delay is user-configurable (DB key: chProcCheckDelayMs, default 200 ms).
-local CH_PROC_CHECK_DELAY_DEFAULT_MS = 200
-local function getChProcCheckDelay()
+-- How long after UNIT_SPELLCAST_CHANNEL_START to read the proc texture.
+-- Configurable via Options → General → Detection (default 200 ms).
+local PROC_CHECK_DELAY_DEFAULT_MS = 200
+local function getProcCheckDelay()
     local db = VoidShieldHelperDB
-    local ms = db and db.chProcCheckDelayMs or CH_PROC_CHECK_DELAY_DEFAULT_MS
+    local ms = db and db.procCheckDelayMs or PROC_CHECK_DELAY_DEFAULT_MS
     return ms / 1000
 end
--- Minimum gap between two counted penance casts (guards against multi-bolt events).
-local PENANCE_DEBOUNCE  = 2.0   -- seconds
 -- How many penance results to keep in the rolling history.
 -- How many penance results to keep in the rolling log (purely for display).
 -- No game-mechanic reason to cap this; just controls memory used by the table.
@@ -223,21 +214,14 @@ local iterationsUntilSlotRefresh = 0
 
 local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visible
 
-local pendingCheck             = false  -- true while waiting for PROC_CHECK_DELAY
-local shieldActiveOnCast       = false  -- snapshot of shieldActive at penance cast
-local lastPenanceTime          = 0      -- time of last counted penance cast
-
--- plain result strings (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first
+-- Penance cast results (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first.
 local penanceHistory           = {}
 
--- ─── Mechanism B state (CHANNEL_START only) ────────────────────────────────────
--- Parallel tracker using UNIT_SPELLCAST_CHANNEL_START alone.
--- A short delay (CH_PROC_CHECK_DELAY) accounts for server round-trip lag.
--- Runs alongside mechanism A (debounce) for in-game comparison.
-local chPendingCheck           = false  -- true while waiting for CH_PROC_CHECK_DELAY
-local chShieldActiveOnCast     = false  -- shield snapshot at CHANNEL_START
-local chLastSpellID            = 0      -- spell ID that triggered the current channel
-local chHistory                = {}     -- same format as penanceHistory, newest first
+-- ─── Detection state ─────────────────────────────────────────────────────────
+-- Owned by onPenanceCastStart.  Swap the detection algorithm by replacing that
+-- function; its only external contract is calling recordResult(result).
+local pendingCheck             = false  -- true while the proc-check timer is live
+local shieldActiveOnCast       = false  -- shield snapshot taken at cast start
 
 -- ─── Shared event log ────────────────────────────────────────────────────────
 -- Ring buffer of plain-text event strings for the copy-log popup, newest first.
@@ -354,8 +338,10 @@ local function pollShieldState()
 end
 
 -- ─── Penance cast handling ───────────────────────────────────────────────────
+-- recordResult(result) is the interface between the detection algorithm and
+-- the history / predictor / display layers.  Only onPenanceCastStart calls it.
 
---- Push a result onto the history and refresh the debug display.
+--- Push a result onto the history, update the deck predictor, and refresh displays.
 local function recordResult(result)
     table.insert(penanceHistory, 1, result)
     if #penanceHistory > MAX_HISTORY then
@@ -377,102 +363,55 @@ local function recordResult(result)
     updateForecastDisplay()
 end
 
---- Called once per logical penance cast (debounced).
--- Snapshots the current shield state, then after a short delay reads the
--- texture again to classify the cast as PROC / NO_PROC / UNKNOWN.
+-- ─── Detection algorithm ─────────────────────────────────────────────────────
+-- To swap detection algorithms: replace onPenanceCastStart and update the
+-- UNIT_SPELLCAST_* registrations at the bottom of this file.
+-- Contract: call recordResult(RESULT_PROC | RESULT_NO_PROC | RESULT_UNKNOWN)
+-- exactly once per logical Penance cast.
 --
--- State machine:
---   Case 1: shield was INACTIVE → cast → shield now ACTIVE   → PROC
---   Case 2: shield was ACTIVE   → cast → (any state)         → UNKNOWN
---   Case 3: shield was INACTIVE → cast → shield still INACTIVE → NO_PROC
-local function onPenanceCast()
-    local now = GetTime()
-    if now - lastPenanceTime < PENANCE_DEBOUNCE then return end
-    lastPenanceTime = now
+-- Current algorithm: UNIT_SPELLCAST_CHANNEL_START + configurable delay.
+--   State machine:
+--     shield ACTIVE  at cast start           → UNKNOWN  (new proc undetectable)
+--     shield INACTIVE, ACTIVE after delay    → PROC
+--     shield INACTIVE, INACTIVE after delay  → NO_PROC
 
-    -- Snapshot shield state at the moment of the cast.
-    pollShieldState()
-    shieldActiveOnCast = shieldActive
-    pendingCheck       = true
-    updateDebugDisplay()
-
-    C_Timer.After(PROC_CHECK_DELAY, function()
-        if not pendingCheck then return end
+--- Called on UNIT_SPELLCAST_CHANNEL_START for a matched Penance spell ID.
+local function onPenanceCastStart(spellID)
+    if pendingCheck then
+        -- A previous cast's timer is still live.  Force-complete it now so the
+        -- history stays contiguous (handles fast recasts inside the delay window).
+        logEvent("CHANNEL_START while check pending; force-completing")
         pendingCheck = false
-
-        pollShieldState()
-
-        local result
-        if shieldActiveOnCast then
-            -- Shield was already up; impossible to tell if a new proc landed.
-            result = RESULT_UNKNOWN
-        elseif shieldActive then
-            -- Shield was down, now it's up → proc triggered.
-            result = RESULT_PROC
-        else
-            -- Shield was down and is still down → no proc.
-            result = RESULT_NO_PROC
-        end
-
-        recordResult(result)
-    end)
-end
-
--- ─── Mechanism B: CHANNEL_START + SUCCEEDED tracker ──────────────────────────
--- Separate history fed by CHANNEL_START (cast start) + SUCCEEDED (first bolt).
--- Does NOT touch penanceHistory or the forecast display.
--- Results stored in chHistory for debug comparison only.
-
---- Push a result into chHistory (newest first, capped at MAX_HISTORY).
-local function chRecordResult(result)
-    table.insert(chHistory, 1, result)
-    if #chHistory > MAX_HISTORY then
-        chHistory[#chHistory] = nil
-    end
-    logEvent(string.format("[B] recorded %s  (total=%d)", result, #chHistory))
-    updateDebugDisplay()
-end
-
---- Called when CHANNEL_START fires for a Penance spell ID.
--- Records the shield state immediately, then after CH_PROC_CHECK_DELAY reads
--- the texture again to determine if the cast triggered a Void Shield proc.
--- No dependency on SUCCEEDED; the delay covers server round-trip lag.
-local function onChCastStart(spellID)
-    chLastSpellID = spellID
-    if chPendingCheck then
-        -- Previous cast's timer still running: force-complete it now.
-        logEvent("[B] CHANNEL_START while check pending; force-completing")
-        chPendingCheck = false
         pollShieldState()
         local forceResult
-        if chShieldActiveOnCast then
+        if shieldActiveOnCast then
             forceResult = RESULT_UNKNOWN
         elseif shieldActive then
             forceResult = RESULT_PROC
         else
             forceResult = RESULT_NO_PROC
         end
-        chRecordResult(forceResult)
+        recordResult(forceResult)
     end
-    chPendingCheck       = false
+    pendingCheck       = false
     pollShieldState()
-    chShieldActiveOnCast = shieldActive
-    logEvent(string.format("[B] CHANNEL_START %d shield=%s", spellID,
+    shieldActiveOnCast = shieldActive
+    logEvent(string.format("CHANNEL_START %d shield=%s", spellID,
         shieldActive and "Y" or "N"))
-    chPendingCheck = true
-    C_Timer.After(getChProcCheckDelay(), function()
-        if not chPendingCheck then return end
-        chPendingCheck = false
+    pendingCheck = true
+    C_Timer.After(getProcCheckDelay(), function()
+        if not pendingCheck then return end
+        pendingCheck = false
         pollShieldState()
         local result
-        if chShieldActiveOnCast then
+        if shieldActiveOnCast then
             result = RESULT_UNKNOWN
         elseif shieldActive then
             result = RESULT_PROC
         else
             result = RESULT_NO_PROC
         end
-        chRecordResult(result)
+        recordResult(result)
     end)
     updateDebugDisplay()
 end
@@ -752,38 +691,17 @@ local function createDebugFrame()
         f.histLines[i] = line
     end
 
-    -- Mechanism B section
-    local chBaseY = -110 - (MAX_DISPLAY_HISTORY * 18) - 14
-    local chHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    chHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, chBaseY)
-    chHeader:SetText("|cff88ccffMech B history (CH_START+SUCCEEDED):|r")
-
-    f.chHistLines = {}
-    for i = 1, MAX_DISPLAY_HISTORY do
-        local line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, chBaseY - (i * 18))
-        line:SetWidth(212)
-        line:SetJustifyH("LEFT")
-        line:SetText(string.format("#%d: -", i))
-        f.chHistLines[i] = line
-    end
-
-    -- Copy-log button
-    local logBtnY = chBaseY - (MAX_DISPLAY_HISTORY * 18) - 10
+    -- Event log button
+    local logBtnY = -110 - (MAX_DISPLAY_HISTORY * 18) - 10
     local logBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     logBtn:SetSize(220, 22)
     logBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 10, logBtnY)
     logBtn:SetText("Show Event Log (copy/paste)")
     logBtn:SetScript("OnClick", function()
         local lines = {}
-        lines[#lines+1] = "=== Mechanism A (debounce) history ==="
+        lines[#lines+1] = "=== Penance history (newest first) ==="
         for i = 1, #penanceHistory do
             lines[#lines+1] = string.format("#%d: %s", i, penanceHistory[i])
-        end
-        lines[#lines+1] = ""
-        lines[#lines+1] = "=== Mechanism B (CH_START+SUCCEEDED) history ==="
-        for i = 1, #chHistory do
-            lines[#lines+1] = string.format("#%d: %s", i, chHistory[i])
         end
         lines[#lines+1] = ""
         lines[#lines+1] = "=== Event log (newest first) ==="
@@ -958,28 +876,6 @@ updateDebugDisplay = function()
         end
     end
 
-    -- Mechanism B pending state
-    if debugFrame.pendingLabel then
-        if chPendingCheck then
-            debugFrame.pendingLabel:SetText((debugFrame.pendingLabel:GetText() or "")
-                .. "  |cff88ccff[B:check pending]|r")
-        end
-    end
-
-    -- Mechanism B history
-    if debugFrame.chHistLines then
-        for i = 1, MAX_DISPLAY_HISTORY do
-            local result = chHistory[i]
-            if result then
-                local c = RESULT_COLOR[result] or "|cffffffff"
-                debugFrame.chHistLines[i]:SetText(
-                    string.format("|cff888888#%d|r: %s%s|r", i, c, result))
-            else
-                debugFrame.chHistLines[i]:SetText(
-                    string.format("|cff888888#%d: -|r", i))
-            end
-        end
-    end
 end
 
 -- ─── Frame settings (scale / lock / backdrop) ───────────────────────────────
@@ -1107,13 +1003,6 @@ local function resetState()
     shieldActive               = false
     pendingCheck               = false
     shieldActiveOnCast         = false
-    lastPenanceTime            = 0
-    -- Mechanism B
-    chHistory                  = {}
-    chPendingCheck             = false
-    chShieldActiveOnCast       = false
-    chLastSpellID              = 0
-    -- Shared
     eventLog                   = {}
     watchSlot                  = nil
     iterationsUntilSlotRefresh = 0
@@ -1127,8 +1016,7 @@ eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
-eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- mechanism B
+eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- detection algorithm
 eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
@@ -1172,6 +1060,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeMain     == nil then db.lightSizeMain     = 24   end
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
+        if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
@@ -1210,24 +1099,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         startTicker()
         updateDebugDisplay()
 
-    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
-        if not isDiscPriest then return end
-        local unit, _, spellID = ...
-        if unit ~= "player" then return end
-        if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCast()  -- mechanism A (debounce, baseline)
-        else
-            logEvent(string.format("SUCCEEDED %d (no match)", spellID))
-        end
-
     elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
         if not isDiscPriest then return end
         local unit, _, spellID = ...
         if unit ~= "player" then return end
-        if CH_PENANCE_SPELL_IDS[spellID] then
-            onChCastStart(spellID)  -- mechanism B only
+        if PENANCE_SPELL_IDS[spellID] then
+            onPenanceCastStart(spellID)
         else
-            logEvent(string.format("CH_START %d (no match)", spellID))
+            logEvent(string.format("CHANNEL_START %d (no match)", spellID))
         end
 
     elseif event == "ACTIONBAR_SLOT_CHANGED" then

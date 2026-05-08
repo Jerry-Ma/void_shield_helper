@@ -600,9 +600,17 @@ local function buildOptionsFrame()
         function(v) db.debugScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDS)
 
-    sectionHeader(pGen, "Colours", -212)
+    sectionHeader(pGen, "Detection", -212)
 
-    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -230,
+    local wProcDelay = makeSlider(pGen, "Proc check delay (ms)", 50, 500, 10, -230,
+        function() return db.procCheckDelayMs or 200 end,
+        function(v) db.procCheckDelayMs = math.floor(v + 0.5) end,
+        "%d ms")
+    table.insert(widgets, wProcDelay)
+
+    sectionHeader(pGen, "Colours", -286)
+
+    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -304,
         function() return db.smoothColors or false end,
         function(v) db.smoothColors = v
             if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end end)
@@ -619,7 +627,7 @@ local function buildOptionsFrame()
     }
     local ROW_H = 16
     local SW_SZ = 10
-    local yLeg  = -258
+    local yLeg  = -332
     for _, row in ipairs(LEGEND) do
         local sw = pGen:CreateTexture(nil, "ARTWORK")
         sw:SetSize(SW_SZ, SW_SZ)
@@ -745,14 +753,6 @@ local function buildOptionsFrame()
         function(name) db.debugBgTex = name
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDBgTex)
-
-    sectionHeader(pDebug, "Mechanism B", -210)
-
-    local wChDelay = makeSlider(pDebug, "Proc Check Delay (ms)", 50, 500, 10, -228,
-        function() return db.chProcCheckDelayMs or 200 end,
-        function(v) db.chProcCheckDelayMs = math.floor(v + 0.5) end,
-        "%d ms")
-    table.insert(widgets, wChDelay)
 
     -- Hint
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
