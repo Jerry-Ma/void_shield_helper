@@ -90,6 +90,18 @@ local function DeckPredictor_new()
     return { phases = phases }
 end
 
+--- Discard phases with non-zero offset, keeping only the offset-0 phase.
+--- Used when entering a new zone/instance with the "prune offsets" option on:
+--- assumes the dungeon starts at a clean block boundary so the predictor
+--- converges immediately instead of waiting for natural invalidation.
+local function DeckPredictor_pruneToOffset0(self)
+    for i, p in ipairs(self.phases) do
+        if i ~= 1 then   -- phases[1] is offset=0
+            p.isValid = false
+        end
+    end
+end
+
 local function DeckPredictor_update(self, val)
     for _, p in ipairs(self.phases) do
         -- Invariant: isValid is monotone-decreasing (set to false, never back to true).
@@ -1083,6 +1095,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
         if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
+        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
@@ -1098,9 +1111,20 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
 
     elseif event == "PLAYER_ENTERING_WORLD" then
-        -- Deck resets on entering an instance or the world.
         stopTicker()
-        resetState()
+        local db = VoidShieldHelperDB
+        if db and db.pruneOffsetOnZone then
+            -- Prune mode: keep the offset-0 phase only; preserve history and predictor.
+            -- Assumes the new instance starts at a clean deck-block boundary.
+            DeckPredictor_pruneToOffset0(predictor)
+            pendingCheck       = false
+            shieldActiveOnCast = false
+            shieldActive       = false
+            watchSlot          = nil
+        else
+            -- Default: full reset on every zone transition.
+            resetState()
+        end
         updateSpecState()
         refreshWatchSlot()
         startTicker()
