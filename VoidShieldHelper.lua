@@ -5,10 +5,16 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs.
--- SUCCEEDED fires the bolt IDs; CHANNEL_START fires the channel ID (47757).
--- Mech A (debounce) uses the bolt IDs. Mech B (CH_START) uses 47757 for start.
+-- Penance spell IDs for mechanism A (UNIT_SPELLCAST_SUCCEEDED + 2s debounce).
+-- UNCHANGED from v1.0 baseline.
 local PENANCE_SPELL_IDS = {
+    [47540] = true,  -- Penance
+    [47666] = true,  -- Penance (alternate ID)
+}
+
+-- Penance spell IDs for mechanism B (CH_START + SUCCEEDED comparison tracker).
+-- Superset: includes the channel-start ID (47757) and healing-bolt ID (47750).
+local CH_PENANCE_SPELL_IDS = {
     [47540] = true,  -- Penance bolt (SUCCEEDED, damage)
     [47750] = true,  -- Penance bolt (SUCCEEDED, healing)
     [47757] = true,  -- Penance channel (CHANNEL_START)
@@ -1218,9 +1224,12 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         local unit, _, spellID = ...
         if unit ~= "player" then return end
         if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCast()           -- mechanism A (debounce)
+            onPenanceCast()            -- mechanism A (debounce, baseline)
+        end
+        if CH_PENANCE_SPELL_IDS[spellID] then
             onChCastSucceeded(spellID) -- mechanism B
-        else
+        end
+        if not PENANCE_SPELL_IDS[spellID] and not CH_PENANCE_SPELL_IDS[spellID] then
             logEvent(string.format("SUCCEEDED %d (no match)", spellID))
         end
 
@@ -1228,7 +1237,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if not isDiscPriest then return end
         local unit, _, spellID = ...
         if unit ~= "player" then return end
-        if PENANCE_SPELL_IDS[spellID] then
+        if CH_PENANCE_SPELL_IDS[spellID] then
             onChCastStart(spellID)     -- mechanism B only
         else
             logEvent(string.format("%s %d (no match)",
