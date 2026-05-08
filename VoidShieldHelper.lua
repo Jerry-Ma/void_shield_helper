@@ -653,15 +653,9 @@ local function createDebugFrame()
     slotLabel:SetText("")
     f.slotLabel = slotLabel
 
-    -- Pending indicator
-    local pendingLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    pendingLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -60)
-    pendingLabel:SetText("")
-    f.pendingLabel = pendingLabel
-
     -- Deck prediction probability
     local probLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    probLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -76)
+    probLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -62)
     probLabel:SetWidth(220)
     probLabel:SetJustifyH("LEFT")
     probLabel:SetText("Next proc: —")
@@ -669,7 +663,7 @@ local function createDebugFrame()
 
     -- Phase / break info (second line under prob)
     local phaseLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    phaseLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -92)
+    phaseLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -78)
     phaseLabel:SetWidth(220)
     phaseLabel:SetJustifyH("LEFT")
     phaseLabel:SetText("")
@@ -677,7 +671,7 @@ local function createDebugFrame()
 
     -- History verification (shown when phase converged)
     local verifyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    verifyLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -108)
+    verifyLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -94)
     verifyLabel:SetWidth(220)
     verifyLabel:SetJustifyH("LEFT")
     verifyLabel:SetText("")
@@ -685,14 +679,14 @@ local function createDebugFrame()
 
     -- History section header
     local histHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    histHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -124)
+    histHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -110)
     histHeader:SetText("Penance history (newest first):")
 
     -- History entry lines
     f.histLines = {}
     for i = 1, MAX_DISPLAY_HISTORY do
         local line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -124 - (i * 18))
+        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -110 - (i * 18))
         line:SetWidth(212)
         line:SetJustifyH("LEFT")
         line:SetText(string.format("#%d: —", i))
@@ -708,11 +702,15 @@ end
 updateDebugDisplay = function()
     if not debugFrame then return end
 
-    -- Shield status
+    -- Shield status (pending indicator appended when a check is in flight)
     if shieldActive then
-        debugFrame.statusVal:SetText("|cff00ff00ACTIVE|r")
+        debugFrame.statusVal:SetText(pendingCheck
+            and "|cff00ff00ACTIVE|r  |cffffff00[checking...]|r"
+            or  "|cff00ff00ACTIVE|r")
     else
-        debugFrame.statusVal:SetText("|cffff4444INACTIVE|r")
+        debugFrame.statusVal:SetText(pendingCheck
+            and "|cffff4444INACTIVE|r  |cffffff00[checking...]|r"
+            or  "|cffff4444INACTIVE|r")
     end
 
     -- PW:S slot info / warning
@@ -726,13 +724,6 @@ updateDebugDisplay = function()
             debugFrame.slotLabel:SetText(
                 "|cffff4444PW:S not on bar! Add from spellbook.|r")
         end
-    end
-
-    -- Pending indicator
-    if pendingCheck then
-        debugFrame.pendingLabel:SetText("|cffffff00waiting for texture check...|r")
-    else
-        debugFrame.pendingLabel:SetText("")
     end
 
     -- Prediction probability
