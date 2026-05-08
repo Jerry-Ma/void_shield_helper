@@ -899,6 +899,7 @@ end
 VSH.applySettings         = function() applySettings() end
 VSH.updateForecastDisplay = function() updateForecastDisplay() end
 VSH.rebuildLights         = function() if forecastFrame then rebuildLights(forecastFrame); updateForecastDisplay() end end
+VSH.probColor             = function(p) return probColor(p) end
 
 local logPopup = nil  -- shared popup for the debug log (opened from options)
 

@@ -610,37 +610,85 @@ local function buildOptionsFrame()
 
     sectionHeader(pGen, "Colours", -286)
 
+    local refreshBar  -- forward ref; assigned below once segments are built
+
     local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -304,
         function() return db.smoothColors or false end,
         function(v) db.smoothColors = v
-            if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end end)
+            if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end
+            if refreshBar then refreshBar() end end)
     table.insert(widgets, wSmooth)
 
-    -- Probability colour legend
-    local LEGEND = {
-        { r=0.0, g=0.9, b=0.9, label="100%  - will proc" },
-        { r=0.1, g=0.9, b=0.1, label=">=60%  - likely" },
-        { r=0.9, g=0.9, b=0.1, label=">=30%  - possible" },
-        { r=1.0, g=0.5, b=0.0, label="< 30%  - unlikely" },
-        { r=0.9, g=0.2, b=0.2, label="   0%  - won't proc" },
-        { r=0.4, g=0.4, b=0.4, label="  n/a  - no data yet" },
-    }
-    local ROW_H = 16
-    local SW_SZ = 10
-    local yLeg  = -332
-    for _, row in ipairs(LEGEND) do
-        local sw = pGen:CreateTexture(nil, "ARTWORK")
-        sw:SetSize(SW_SZ, SW_SZ)
-        sw:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, yLeg + (SW_SZ - ROW_H) / 2)
-        sw:SetColorTexture(row.r, row.g, row.b, 1)
+    -- Probability preview bar
+    local BAR_W = PANEL_W - 20   -- 280
+    local BAR_H = 14
+    local N_SEG = 40
+    local barY  = -330
 
+    local barBorder = CreateFrame("Frame", nil, pGen, "BackdropTemplate")
+    barBorder:SetSize(BAR_W + 2, BAR_H + 2)
+    barBorder:SetPoint("TOPLEFT", pGen, "TOPLEFT", 9, barY)
+    barBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    barBorder:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+
+    local segs = {}
+    local segW = BAR_W / N_SEG
+    for i = 1, N_SEG do
+        local seg = pGen:CreateTexture(nil, "ARTWORK")
+        seg:SetSize(segW, BAR_H)
+        seg:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + (i - 1) * segW, barY - 1)
+        segs[i] = seg
+    end
+
+    -- Threshold markers at 30% and 60%
+    for _, th in ipairs({ 0.30, 0.60 }) do
+        local mark = pGen:CreateTexture(nil, "OVERLAY")
+        mark:SetSize(1, BAR_H)
+        mark:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + math.floor(th * BAR_W), barY - 1)
+        mark:SetColorTexture(1, 1, 1, 0.7)
+    end
+
+    -- Axis labels
+    local axisY = barY - BAR_H - 4
+    for _, ax in ipairs({
+        { x = 10,                                 text = "0%"   },
+        { x = 10 + math.floor(BAR_W * 0.30) - 6, text = "30%"  },
+        { x = 10 + math.floor(BAR_W * 0.60) - 6, text = "60%"  },
+        { x = 10 + BAR_W - 22,                    text = "100%" },
+    }) do
+        local al = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        al:SetPoint("TOPLEFT", pGen, "TOPLEFT", ax.x, axisY)
+        al:SetText(ax.text)
+        al:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+    end
+
+    -- Special case swatches (outside the gradient range)
+    local specY = axisY - 18
+    for _, row in ipairs({
+        { r=0.4, g=0.4, b=0.4, label="n/a  - no data yet"        },
+        { r=0.9, g=0.2, b=0.2, label="  0% - guaranteed no-proc"  },
+        { r=0.0, g=0.9, b=0.9, label="100% - guaranteed proc"     },
+    }) do
+        local sw = pGen:CreateTexture(nil, "ARTWORK")
+        sw:SetSize(10, 10)
+        sw:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, specY - 2)
+        sw:SetColorTexture(row.r, row.g, row.b, 1)
         local lbl = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        lbl:SetPoint("LEFT", pGen, "TOPLEFT", 10 + SW_SZ + 6, yLeg - ROW_H / 2)
+        lbl:SetPoint("TOPLEFT", pGen, "TOPLEFT", 22, specY)
         lbl:SetText(row.label)
         lbl:SetTextColor(S.text[1], S.text[2], S.text[3])
-
-        yLeg = yLeg - ROW_H
+        specY = specY - 16
     end
+
+    refreshBar = function()
+        local getColor = VSH.probColor or function() return 0.5, 0.5, 0.5 end
+        for i = 1, N_SEG do
+            local p = (i - 0.5) / N_SEG
+            local r, g, b = getColor(p)
+            segs[i]:SetColorTexture(r, g, b, 1)
+        end
+    end
+    table.insert(widgets, { refresh = refreshBar })
 
     -- ── Tab 2: Forecast Frame ─────────────────────────────────────────────────
     local pFcast = addTab("Frame")
