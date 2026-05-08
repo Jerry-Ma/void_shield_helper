@@ -444,7 +444,7 @@ local optionsFrame = nil
 local function buildOptionsFrame()
     local SIDEBAR_W = 75
     local TOTAL_W   = SIDEBAR_W + PANEL_W  -- 375
-    local PANEL_H   = 420
+    local PANEL_H   = 490
     local TITLE_H   = 26
     local TAB_H     = 30
 
@@ -590,52 +590,115 @@ local function buildOptionsFrame()
 
     sectionHeader(pGen, "Scale", -86)
 
-    local wFS = makeSlider(pGen, "Forecast Scale", 0.5, 2.0, 0.05, -104,
+    local wFS = makeSlider(pGen, "Indicator Frame Scale", 0.5, 2.0, 0.05, -104,
         function() return db.forecastScale or 1.0 end,
         function(v) db.forecastScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFS)
 
-    local wDS = makeSlider(pGen, "Debug Scale", 0.5, 2.0, 0.05, -156,
+    local wDS = makeSlider(pGen, "Debug Window Scale", 0.5, 2.0, 0.05, -156,
         function() return db.debugScale or 1.0 end,
         function(v) db.debugScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDS)
 
-    sectionHeader(pGen, "Colours", -212)
+    sectionHeader(pGen, "Detection", -212)
 
-    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -230,
+    local wProcDelay = makeSlider(pGen, "Proc check delay (ms)", 50, 500, 10, -230,
+        function() return db.procCheckDelayMs or 200 end,
+        function(v) db.procCheckDelayMs = math.floor(v + 0.5) end,
+        "%d ms")
+    table.insert(widgets, wProcDelay)
+
+    sectionHeader(pGen, "Colours", -286)
+
+    local refreshBar  -- forward ref; assigned below once segments are built
+
+    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -304,
         function() return db.smoothColors or false end,
         function(v) db.smoothColors = v
-            if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end end)
+            if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end
+            if refreshBar then refreshBar() end end)
     table.insert(widgets, wSmooth)
 
-    -- Probability colour legend
-    local LEGEND = {
-        { r=0.0, g=0.9, b=0.9, label="100%  - will proc" },
-        { r=0.1, g=0.9, b=0.1, label=">=60%  - likely" },
-        { r=0.9, g=0.9, b=0.1, label=">=30%  - possible" },
-        { r=1.0, g=0.5, b=0.0, label="< 30%  - unlikely" },
-        { r=0.9, g=0.2, b=0.2, label="   0%  - won't proc" },
-        { r=0.4, g=0.4, b=0.4, label="  n/a  - no data yet" },
-    }
-    local ROW_H = 16
-    local SW_SZ = 10
-    local yLeg  = -258
-    for _, row in ipairs(LEGEND) do
+    -- Special case swatches (outside the gradient range)
+    local specY = -328
+    for _, row in ipairs({
+        { r=0.4, g=0.4, b=0.4, label="n/a  - no data yet"       },
+        { r=0.9, g=0.2, b=0.2, label="  0% - guaranteed no-proc" },
+        { r=0.0, g=0.9, b=0.9, label="100% - guaranteed proc"    },
+    }) do
         local sw = pGen:CreateTexture(nil, "ARTWORK")
-        sw:SetSize(SW_SZ, SW_SZ)
-        sw:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, yLeg + (SW_SZ - ROW_H) / 2)
+        sw:SetSize(10, 10)
+        sw:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, specY - 2)
         sw:SetColorTexture(row.r, row.g, row.b, 1)
-
         local lbl = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        lbl:SetPoint("LEFT", pGen, "TOPLEFT", 10 + SW_SZ + 6, yLeg - ROW_H / 2)
+        lbl:SetPoint("TOPLEFT", pGen, "TOPLEFT", 22, specY)
         lbl:SetText(row.label)
         lbl:SetTextColor(S.text[1], S.text[2], S.text[3])
-
-        yLeg = yLeg - ROW_H
+        specY = specY - 16
     end
 
+    -- Probability colour preview bar
+    local BAR_W = PANEL_W - 50   -- 250
+    local BAR_H = 14
+    local N_SEG = 40
+    local barY  = specY - 10
+
+    local prevLbl = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    prevLbl:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, barY)
+    prevLbl:SetText("Colour preview  (0 -- 100%)")
+    prevLbl:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+
+    local barY2 = barY - 16
+    local barBorder = CreateFrame("Frame", nil, pGen, "BackdropTemplate")
+    barBorder:SetSize(BAR_W + 2, BAR_H + 2)
+    barBorder:SetPoint("TOPLEFT", pGen, "TOPLEFT", 9, barY2)
+    barBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    barBorder:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+
+    local segs = {}
+    local segW = BAR_W / N_SEG
+    for i = 1, N_SEG do
+        local seg = pGen:CreateTexture(nil, "ARTWORK")
+        seg:SetSize(segW, BAR_H)
+        seg:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + (i - 1) * segW, barY2 - 1)
+        segs[i] = seg
+    end
+
+    -- Threshold markers at 33% and 66%
+    local tLo, tHi = VSH.THRESH_LO, VSH.THRESH_HI
+    for _, th in ipairs({ tLo, tHi }) do
+        local mark = pGen:CreateTexture(nil, "OVERLAY")
+        mark:SetSize(1, BAR_H)
+        mark:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + math.floor(th * BAR_W), barY2 - 1)
+        mark:SetColorTexture(1, 1, 1, 0.7)
+    end
+
+    -- Axis labels
+    local axisY = barY2 - BAR_H - 2
+    for _, ax in ipairs({
+        { x = 10,                                 text = "0%"   },
+        { x = 10 + math.floor(BAR_W * tLo) - 6, text = string.format("%d%%", tLo * 100) },
+        { x = 10 + math.floor(BAR_W * tHi) - 6, text = string.format("%d%%", tHi * 100) },
+        { x = 10 + BAR_W - 16,                    text = "100%" },
+    }) do
+        local al = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        al:SetPoint("TOPLEFT", pGen, "TOPLEFT", ax.x, axisY)
+        al:SetText(ax.text)
+        al:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+    end
+
+    refreshBar = function()
+        local getColor = VSH.probColor or function() return 0.5, 0.5, 0.5 end
+        for i = 1, N_SEG do
+            local p = (i - 0.5) / N_SEG
+            local r, g, b = getColor(p)
+            segs[i]:SetColorTexture(r, g, b, 1)
+        end
+    end
+    table.insert(widgets, { refresh = refreshBar })
+
     -- ── Tab 2: Forecast Frame ─────────────────────────────────────────────────
-    local pFcast = addTab("Forecast")
+    local pFcast = addTab("Frame")
 
     sectionHeader(pFcast, "Background & Border", -10)
 
@@ -668,7 +731,7 @@ local function buildOptionsFrame()
     table.insert(widgets, wFBgTex)
 
     -- ── Tab 3: Lights ─────────────────────────────────────────────────────────
-    local pLights = addTab("Lights")
+    local pLights = addTab("Indicators")
 
     sectionHeader(pLights, "Texture", -10)
 
@@ -746,6 +809,16 @@ local function buildOptionsFrame()
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDBgTex)
 
+    sectionHeader(pDebug, "Diagnostics", -210)
+
+    local logBtn = CreateFrame("Button", nil, pDebug, "UIPanelButtonTemplate")
+    logBtn:SetSize(PANEL_W - 20, 22)
+    logBtn:SetPoint("TOPLEFT", pDebug, "TOPLEFT", 10, -228)
+    logBtn:SetText("Show Event Log (copy/paste)")
+    logBtn:SetScript("OnClick", function()
+        if VSH.showDebugLog then VSH.showDebugLog() end
+    end)
+
     -- Hint
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
@@ -774,4 +847,27 @@ function VSH.toggleOptions()
     optionsFrame:Show()
     optionsFrame:Raise()
     if optionsFrame.refresh then optionsFrame.refresh() end
+end
+
+
+-- ── Blizzard Addon Options stub ────────────────────────────────────────────
+do
+    local stub = CreateFrame("Frame", "VoidShieldHelperBlizzardStub")
+
+    local t = stub:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    t:SetPoint("TOPLEFT", 16, -16)
+    t:SetText("VoidShieldHelper")
+
+    local d = stub:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    d:SetPoint("TOPLEFT", t, "BOTTOMLEFT", 0, -8)
+    d:SetText("Tracks Penance casts and Void Shield procs for Disc Priest.")
+
+    local btn = CreateFrame("Button", nil, stub, "UIPanelButtonTemplate")
+    btn:SetSize(200, 28)
+    btn:SetPoint("TOPLEFT", d, "BOTTOMLEFT", 0, -12)
+    btn:SetText("Open Options  (/vsh)")
+    btn:SetScript("OnClick", function() VSH.toggleOptions() end)
+
+    local cat = Settings.RegisterCanvasLayoutCategory(stub, "VoidShieldHelper")
+    Settings.RegisterAddOnCategory(cat)
 end

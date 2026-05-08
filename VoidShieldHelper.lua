@@ -5,11 +5,14 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs fired via UNIT_SPELLCAST_SUCCEEDED.
--- Both IDs are tracked; a 2-second debounce prevents multi-bolt double-counting.
+-- Penance spell IDs matched on UNIT_SPELLCAST_CHANNEL_START.
+-- 47757 is the canonical channel-start ID; the bolt IDs and empowered
+-- variant are included for completeness.
 local PENANCE_SPELL_IDS = {
-    [47540] = true,  -- Penance
-    [47666] = true,  -- Penance (alternate ID)
+    [47540] = true,  -- Penance bolt (damage)
+    [47750] = true,  -- Penance bolt (healing)
+    [47757] = true,  -- Penance channel start
+    [47666] = true,  -- Penance (empowered / Dark Reprimand variant)
 }
 
 -- Power Word: Shield action-button textures.
@@ -17,6 +20,10 @@ local PENANCE_SPELL_IDS = {
 -- PROC_SLOT_TEXTURE  : Void Shield proc overlay (Borrowed Time / Rapture proc)
 local BASE_SLOT_TEXTURE = 135940
 local PROC_SLOT_TEXTURE = 7514191
+
+-- Discrete colour thresholds.  Orange [0, THRESH_LO), yellow [THRESH_LO, THRESH_HI), green [THRESH_HI, 1].
+local THRESH_LO = 0.33
+local THRESH_HI = 0.66
 
 -- Spell IDs for Power Word: Shield on the action bar (used to find the watch slot).
 local PW_SHIELD_SPELL_IDS = {
@@ -32,17 +39,22 @@ local ACTION_BUTTON_PREFIXES = {
     "MultiActionBar4Button",
 }
 
--- How long after a penance UNIT_SPELLCAST_SUCCEEDED we wait before reading the
--- action-button texture to determine if a proc happened.
-local PROC_CHECK_DELAY  = 0.2   -- seconds
--- Minimum gap between two counted penance casts (guards against multi-bolt events).
-local PENANCE_DEBOUNCE  = 2.0   -- seconds
+-- How long after UNIT_SPELLCAST_CHANNEL_START to read the proc texture.
+-- Configurable via Options → General → Detection (default 200 ms).
+local PROC_CHECK_DELAY_DEFAULT_MS = 200
+local function getProcCheckDelay()
+    local db = VoidShieldHelperDB
+    local ms = db and db.procCheckDelayMs or PROC_CHECK_DELAY_DEFAULT_MS
+    return ms / 1000
+end
 -- How many penance results to keep in the rolling history.
 -- How many penance results to keep in the rolling log (purely for display).
 -- No game-mechanic reason to cap this; just controls memory used by the table.
 local MAX_HISTORY         = 30
 -- How many of those entries to render in the debug frame (limited by frame height).
 local MAX_DISPLAY_HISTORY = 9
+-- Max raw event log entries kept for the copy-log popup.
+local MAX_EVENT_LOG       = 60
 
 -- Result constants
 local RESULT_PROC     = "PROC"
@@ -206,12 +218,28 @@ local iterationsUntilSlotRefresh = 0
 
 local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visible
 
-local pendingCheck             = false  -- true while waiting for PROC_CHECK_DELAY
-local shieldActiveOnCast       = false  -- snapshot of shieldActive at penance cast
-local lastPenanceTime          = 0      -- time of last counted penance cast
-
--- plain result strings (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first
+-- Penance cast results (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first.
 local penanceHistory           = {}
+
+-- ─── Detection state ─────────────────────────────────────────────────────────
+-- Owned by onPenanceCastStart.  Swap the detection algorithm by replacing that
+-- function; its only external contract is calling recordResult(result).
+local pendingCheck             = false  -- true while the proc-check timer is live
+local shieldActiveOnCast       = false  -- shield snapshot taken at cast start
+
+-- ─── Shared event log ────────────────────────────────────────────────────────
+-- Ring buffer of plain-text event strings for the copy-log popup, newest first.
+local eventLog                 = {}
+
+--- Prepend a timestamped string to the shared event log.
+local function logEvent(msg)
+    local t = string.format("%.2f", GetTime() % 1000)
+    table.insert(eventLog, 1, string.format("[%s] %s", t, msg))
+    if #eventLog > MAX_EVENT_LOG then
+        eventLog[#eventLog] = nil
+    end
+end
+
 
 --- Returns nil if every complete block in history has at most 1 PROC (consistent),
 --- or a string describing the first offending block (inconsistent).
@@ -314,8 +342,10 @@ local function pollShieldState()
 end
 
 -- ─── Penance cast handling ───────────────────────────────────────────────────
+-- recordResult(result) is the interface between the detection algorithm and
+-- the history / predictor / display layers.  Only onPenanceCastStart calls it.
 
---- Push a result onto the history and refresh the debug display.
+--- Push a result onto the history, update the deck predictor, and refresh displays.
 local function recordResult(result)
     table.insert(penanceHistory, 1, result)
     if #penanceHistory > MAX_HISTORY then
@@ -337,46 +367,59 @@ local function recordResult(result)
     updateForecastDisplay()
 end
 
---- Called once per logical penance cast (debounced).
--- Snapshots the current shield state, then after a short delay reads the
--- texture again to classify the cast as PROC / NO_PROC / UNKNOWN.
+-- ─── Detection algorithm ─────────────────────────────────────────────────────
+-- To swap detection algorithms: replace onPenanceCastStart and update the
+-- UNIT_SPELLCAST_* registrations at the bottom of this file.
+-- Contract: call recordResult(RESULT_PROC | RESULT_NO_PROC | RESULT_UNKNOWN)
+-- exactly once per logical Penance cast.
 --
--- State machine:
---   Case 1: shield was INACTIVE → cast → shield now ACTIVE   → PROC
---   Case 2: shield was ACTIVE   → cast → (any state)         → UNKNOWN
---   Case 3: shield was INACTIVE → cast → shield still INACTIVE → NO_PROC
-local function onPenanceCast()
-    local now = GetTime()
-    if now - lastPenanceTime < PENANCE_DEBOUNCE then return end
-    lastPenanceTime = now
+-- Current algorithm: UNIT_SPELLCAST_CHANNEL_START + configurable delay.
+--   State machine:
+--     shield ACTIVE  at cast start           → UNKNOWN  (new proc undetectable)
+--     shield INACTIVE, ACTIVE after delay    → PROC
+--     shield INACTIVE, INACTIVE after delay  → NO_PROC
 
-    -- Snapshot shield state at the moment of the cast.
+--- Called on UNIT_SPELLCAST_CHANNEL_START for a matched Penance spell ID.
+local function onPenanceCastStart(spellID)
+    if pendingCheck then
+        -- A previous cast's timer is still live.  Force-complete it now so the
+        -- history stays contiguous (handles fast recasts inside the delay window).
+        logEvent("CHANNEL_START while check pending; force-completing")
+        pendingCheck = false
+        pollShieldState()
+        local forceResult
+        if shieldActiveOnCast then
+            forceResult = RESULT_UNKNOWN
+        elseif shieldActive then
+            forceResult = RESULT_PROC
+        else
+            forceResult = RESULT_NO_PROC
+        end
+        recordResult(forceResult)
+    end
+    pendingCheck       = false
     pollShieldState()
     shieldActiveOnCast = shieldActive
-    pendingCheck       = true
-    updateDebugDisplay()
-
-    C_Timer.After(PROC_CHECK_DELAY, function()
+    logEvent(string.format("CHANNEL_START %d shield=%s", spellID,
+        shieldActive and "Y" or "N"))
+    pendingCheck = true
+    C_Timer.After(getProcCheckDelay(), function()
         if not pendingCheck then return end
         pendingCheck = false
-
         pollShieldState()
-
         local result
         if shieldActiveOnCast then
-            -- Shield was already up; impossible to tell if a new proc landed.
             result = RESULT_UNKNOWN
         elseif shieldActive then
-            -- Shield was down, now it's up → proc triggered.
             result = RESULT_PROC
         else
-            -- Shield was down and is still down → no proc.
             result = RESULT_NO_PROC
         end
-
         recordResult(result)
     end)
+    updateDebugDisplay()
 end
+
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
 -- Three lights: [last cast result] [N+1 probability] [N+2 probability]
 -- N+1 is the primary indicator (full size); LAST and N+2 are smaller.
@@ -481,13 +524,15 @@ local function createForecastFrame()
     return f
 end
 
--- Colour stops for the gradient (exclusive of the 0 and 1 special endpoints).
--- Each stop: { threshold 0-1, r, g, b }
+-- Colour stops for the smooth gradient.
+-- Each stop is anchored at the MID-POINT of the corresponding discrete colour
+-- range so the gradient shows the "pure" colour where discrete mode would.
+-- Midpoints are derived from THRESH_LO / THRESH_HI automatically.
+-- Each entry: { prob 0-1, r, g, b }
 local PROB_STOPS = {
-    { 0.00, 1.0, 0.5, 0.0 },   -- orange  (just above 0%)
-    { 0.30, 0.9, 0.9, 0.1 },   -- yellow
-    { 0.60, 0.1, 0.9, 0.1 },   -- green
-    { 1.00, 0.1, 0.9, 0.1 },   -- green  (just below 100%, not cyan)
+    { THRESH_LO / 2,                   1.0, 0.5, 0.0 },  -- orange  midpoint
+    { (THRESH_LO + THRESH_HI) / 2,     0.9, 0.9, 0.1 },  -- yellow  midpoint
+    { (THRESH_HI + 1.0) / 2,           0.1, 0.9, 0.1 },  -- green   midpoint
 }
 
 local function lerpColor(r1, g1, b1, r2, g2, b2, t)
@@ -501,8 +546,11 @@ local function probColor(prob)
 
     local db = VoidShieldHelperDB
     if db and db.smoothColors then
-        -- Smooth gradient between stops (0 and 1 endpoints excluded above)
+        -- Smooth gradient: pure colour at each midpoint, blends at boundaries.
         local s = PROB_STOPS
+        if prob <= s[1][1] then
+            return s[1][2], s[1][3], s[1][4]  -- clamp to first colour
+        end
         for i = 1, #s - 1 do
             local lo, hi = s[i], s[i + 1]
             if prob >= lo[1] and prob <= hi[1] then
@@ -512,14 +560,13 @@ local function probColor(prob)
             end
         end
         local last = s[#s]
-        return last[2], last[3], last[4]
+        return last[2], last[3], last[4]  -- clamp to last colour
     end
 
     -- Discrete mode (default)
-    local pct = prob * 100
-    if pct >= 60 then return 0.1, 0.9, 0.1          -- green
-    elseif pct >= 30 then return 0.9, 0.9, 0.1       -- yellow
-    else return 1.0, 0.5, 0.0 end                    -- orange
+    if prob >= THRESH_HI then return 0.1, 0.9, 0.1          -- green
+    elseif prob >= THRESH_LO then return 0.9, 0.9, 0.1       -- yellow
+    else return 1.0, 0.5, 0.0 end                           -- orange
 end
 
 local function applyLight(light, r, g, b)
@@ -606,11 +653,13 @@ local function createDebugFrame()
     statusVal:SetPoint("LEFT", statusLabel, "RIGHT", 6, 0)
     f.statusVal = statusVal
 
-    -- Pending indicator
-    local pendingLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    pendingLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -46)
-    pendingLabel:SetText("")
-    f.pendingLabel = pendingLabel
+    -- PW:S action-bar slot info / warning
+    local slotLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    slotLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -46)
+    slotLabel:SetWidth(220)
+    slotLabel:SetJustifyH("LEFT")
+    slotLabel:SetText("")
+    f.slotLabel = slotLabel
 
     -- Deck prediction probability
     local probLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -652,6 +701,11 @@ local function createDebugFrame()
         f.histLines[i] = line
     end
 
+    -- Bottom hint
+    local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
+    hint:SetText("|cff888888/vsh  to open options|r")
+
     f:Show()
     return f
 end
@@ -661,18 +715,26 @@ end
 updateDebugDisplay = function()
     if not debugFrame then return end
 
-    -- Shield status
+    -- Shield status (pending indicator appended when a check is in flight)
     if shieldActive then
-        debugFrame.statusVal:SetText("|cff00ff00ACTIVE|r")
+        debugFrame.statusVal:SetText(pendingCheck
+            and "|cff00ff00ACTIVE|r  |cffffff00[checking...]|r"
+            or  "|cff00ff00ACTIVE|r")
     else
-        debugFrame.statusVal:SetText("|cffff4444INACTIVE|r")
+        debugFrame.statusVal:SetText(pendingCheck
+            and "|cffff4444INACTIVE|r  |cffffff00[checking...]|r"
+            or  "|cffff4444INACTIVE|r")
     end
 
-    -- Pending indicator
-    if pendingCheck then
-        debugFrame.pendingLabel:SetText("|cffffff00waiting for texture check...|r")
-    else
-        debugFrame.pendingLabel:SetText("")
+    -- PW:S slot info / warning
+    if debugFrame.slotLabel then
+        if watchSlot then
+            debugFrame.slotLabel:SetText(string.format(
+                "|cff00ff00PW:S on bar: slot %d|r", watchSlot))
+        else
+            debugFrame.slotLabel:SetText(
+                "|cffff4444PW:S not on action bar!|r")
+        end
     end
 
     -- Prediction probability
@@ -765,6 +827,7 @@ updateDebugDisplay = function()
             debugFrame.histLines[i]:SetText(string.format("|cff888888#%d: —|r", i))
         end
     end
+
 end
 
 -- ─── Frame settings (scale / lock / backdrop) ───────────────────────────────
@@ -843,6 +906,76 @@ end
 VSH.applySettings         = function() applySettings() end
 VSH.updateForecastDisplay = function() updateForecastDisplay() end
 VSH.rebuildLights         = function() if forecastFrame then rebuildLights(forecastFrame); updateForecastDisplay() end end
+VSH.THRESH_LO             = THRESH_LO
+VSH.THRESH_HI             = THRESH_HI
+VSH.probColor             = function(p) return probColor(p) end
+
+local logPopup = nil  -- shared popup for the debug log (opened from options)
+
+VSH.showDebugLog = function()
+    local lines = {}
+    lines[#lines+1] = "=== Penance history (newest first) ==="
+    for i = 1, #penanceHistory do
+        lines[#lines+1] = string.format("#%d: %s", i, penanceHistory[i])
+    end
+    lines[#lines+1] = ""
+    lines[#lines+1] = "=== Event log (newest first) ==="
+    for i = 1, #eventLog do
+        lines[#lines+1] = eventLog[i]
+    end
+    local text = table.concat(lines, "\n")
+
+    if not logPopup then
+        local pop = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        pop:SetSize(500, 400)
+        pop:SetPoint("CENTER")
+        pop:SetBackdrop({
+            bgFile   = "Interface\\Buttons\\WHITE8x8",
+            edgeFile = "Interface\\Buttons\\WHITE8x8",
+            edgeSize = 1, tile = true, tileSize = 16,
+        })
+        pop:SetBackdropColor(0, 0, 0, 0.92)
+        pop:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+        pop:SetFrameStrata("DIALOG")
+        pop:EnableMouse(true)
+        pop:SetMovable(true)
+        pop:RegisterForDrag("LeftButton")
+        pop:SetScript("OnDragStart", function(self) self:StartMoving() end)
+        pop:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
+
+        local hdr = pop:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        hdr:SetPoint("TOP", pop, "TOP", 0, -8)
+        hdr:SetText("Debug Log")
+
+        local hint = pop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        hint:SetPoint("TOP", pop, "TOP", 0, -26)
+        hint:SetText("|cff888888Ctrl-A to select all, Ctrl-C to copy|r")
+
+        local scroll = CreateFrame("ScrollFrame", nil, pop, "UIPanelScrollFrameTemplate")
+        scroll:SetPoint("TOPLEFT",  pop, "TOPLEFT",  10, -46)
+        scroll:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -30, 36)
+
+        local eb = CreateFrame("EditBox", nil, scroll)
+        eb:SetMultiLine(true)
+        eb:SetAutoFocus(false)
+        eb:SetFontObject("ChatFontNormal")
+        eb:SetWidth(scroll:GetWidth())
+        eb:SetScript("OnEscapePressed", function() pop:Hide() end)
+        scroll:SetScrollChild(eb)
+        pop.editBox = eb
+
+        local closeBtn = CreateFrame("Button", nil, pop, "UIPanelButtonTemplate")
+        closeBtn:SetSize(80, 22)
+        closeBtn:SetPoint("BOTTOM", pop, "BOTTOM", 0, 8)
+        closeBtn:SetText("Close")
+        closeBtn:SetScript("OnClick", function() pop:Hide() end)
+
+        logPopup = pop
+    end
+    logPopup.editBox:SetText(text)
+    logPopup.editBox:SetCursorPosition(0)
+    logPopup:Show()
+end
 
 -- ─── Ticker ──────────────────────────────────────────────────────────────────
 
@@ -892,7 +1025,7 @@ local function resetState()
     shieldActive               = false
     pendingCheck               = false
     shieldActiveOnCast         = false
-    lastPenanceTime            = 0
+    eventLog                   = {}
     watchSlot                  = nil
     iterationsUntilSlotRefresh = 0
 end
@@ -905,7 +1038,8 @@ eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
-eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- detection algorithm
+eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -948,6 +1082,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeMain     == nil then db.lightSizeMain     = 24   end
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
+        if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
@@ -967,6 +1102,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         stopTicker()
         resetState()
         updateSpecState()
+        refreshWatchSlot()
         startTicker()
         updateDebugDisplay()
 
@@ -976,6 +1112,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         stopTicker()
         resetState()
         updateSpecState()
+        refreshWatchSlot()
         startTicker()
         updateDebugDisplay()
 
@@ -983,15 +1120,26 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         stopTicker()
         resetState()
         updateSpecState()
+        refreshWatchSlot()
         startTicker()
         updateDebugDisplay()
 
-    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+    elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
         if not isDiscPriest then return end
         local unit, _, spellID = ...
         if unit ~= "player" then return end
         if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCast()
+            onPenanceCastStart(spellID)
+        else
+            logEvent(string.format("CHANNEL_START %d (no match)", spellID))
         end
+
+    elseif event == "ACTIONBAR_SLOT_CHANGED" then
+        local prevSlot = watchSlot
+        refreshWatchSlot()
+        if watchSlot ~= prevSlot then
+            updateDebugDisplay()
+        end
+
     end
 end)
