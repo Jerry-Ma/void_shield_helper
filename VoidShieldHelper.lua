@@ -1095,7 +1095,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
         if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
-        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = true  end
+        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
@@ -1114,9 +1114,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         stopTicker()
         local db = VoidShieldHelperDB
         if db and db.pruneOffsetOnZone then
-            -- Prune mode: keep the offset-0 phase only; preserve history and predictor.
-            -- Assumes the new instance starts at a clean deck-block boundary.
+            -- Prune mode: keep only the offset-0 phase so the predictor converges
+            -- immediately on the first cast of the new run (assumes a clean block
+            -- boundary).  History and event log are cleared so the debug display
+            -- doesn't inherit stale block-colouring / verify results from the old run.
             DeckPredictor_pruneToOffset0(predictor)
+            penanceHistory     = {}
+            eventLog           = {}
+            predictorBreakCount = 0
             pendingCheck       = false
             shieldActiveOnCast = false
             shieldActive       = false
