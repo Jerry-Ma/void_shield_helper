@@ -53,6 +53,8 @@ end
 local MAX_HISTORY         = 30
 -- How many of those entries to render in the debug frame (limited by frame height).
 local MAX_DISPLAY_HISTORY = 9
+-- How many recent history entries to replay through a fresh predictor on auto-recovery.
+local RECOVERY_REPLAY_WINDOW = 4
 -- Max raw event log entries kept for the copy-log popup.
 local MAX_EVENT_LOG       = 60
 
@@ -382,7 +384,15 @@ local function recordResult(result)
     if prob == nil then
         predictorBreakCount = predictorBreakCount + 1
         predictor = DeckPredictor_new()
-        DeckPredictor_update(predictor, val)
+        -- Replay the most recent RECOVERY_REPLAY_WINDOW entries (oldest first)
+        -- so the phase filter can eliminate offsets inconsistent with recent history,
+        -- rather than restarting with all 3 phases and just the triggering cast.
+        local replayN = math.min(#penanceHistory, RECOVERY_REPLAY_WINDOW)
+        for j = replayN, 1, -1 do
+            local rv = penanceHistory[j] == RESULT_PROC and 1
+                     or (penanceHistory[j] == RESULT_NO_PROC and 0 or -1)
+            DeckPredictor_update(predictor, rv)
+        end
     end
     updateDebugDisplay()
     updateForecastDisplay()
