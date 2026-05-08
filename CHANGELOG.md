@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.2] - 2026-05-08
+
+### Bugfixes
+- Fixed nil crash (`bad argument #2 to 'min'`) inside `verifyHistoryBlocks` caused by `predictorHistoryDepth` being declared after the function that captures it as an upvalue.
+- History block colouring and the verify label no longer reflect entries from a previous predictor run after a `[reset]` or prune-on-zone-entry.
+- `DeckPredictor_pruneToOffset0` now resets phase[1]'s `slotsFilled`, `minSum`, and `maxSum` to 0, preventing stale phase state after a zone-entry prune.
+- Auto-recovery replay correctly replays the last `RECOVERY_REPLAY_WINDOW` (4) history entries oldest→newest through a fresh predictor, restoring `predictorHistoryDepth` to the replay count.
+
+---
+
 ## [1.1.1] - 2026-05-08
 
 ### Detection
