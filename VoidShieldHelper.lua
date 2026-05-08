@@ -269,7 +269,7 @@ end
 --- Only meaningful when the predictor has converged to a single phase.
 --- UNKNOWN entries count as 0 procs (worst-case assumption for this check).
 local function verifyHistoryBlocks(convergedPhaseOffset)
-    local n = #penanceHistory
+    local n = math.min(#penanceHistory, predictorHistoryDepth)
     if n == 0 then return nil end
 
     -- virtualUnknowns = slots before the first real cast in the first partial block.
@@ -296,6 +296,7 @@ end
 
 local predictor                = DeckPredictor_new()
 local predictorBreakCount      = 0   -- how many times the predictor auto-reset due to a broken sequence
+local predictorHistoryDepth    = 0   -- how many penanceHistory entries the current predictor has processed
 
 local debugFrame               = nil
 local forecastFrame            = nil
@@ -375,6 +376,7 @@ local function recordResult(result)
         penanceHistory[#penanceHistory] = nil
     end
     local val = result == RESULT_PROC and 1 or (result == RESULT_NO_PROC and 0 or -1)
+    predictorHistoryDepth = math.min(predictorHistoryDepth + 1, MAX_HISTORY)
     DeckPredictor_update(predictor, val)
     -- Auto-recover: if every phase was just killed the observed sequence
     -- violated the deck model (can happen with many UNKNOWNs or a genuine
@@ -393,6 +395,9 @@ local function recordResult(result)
                      or (penanceHistory[j] == RESULT_NO_PROC and 0 or -1)
             DeckPredictor_update(predictor, rv)
         end
+        -- The predictor only knows about replayN entries; treat older history
+        -- as belonging to a previous run (grey in display, skipped in verify).
+        predictorHistoryDepth = replayN
     end
     updateDebugDisplay()
     updateForecastDisplay()
@@ -843,8 +848,9 @@ updateDebugDisplay = function()
         if result then
             local resultColor = RESULT_COLOR[result] or "|cffffffff"
             local indexLabel
-            if convergedPhaseOffset then
-                local n          = #penanceHistory
+            if convergedPhaseOffset and i <= predictorHistoryDepth then
+                -- Only colour entries the current predictor has processed.
+                local n          = math.min(#penanceHistory, predictorHistoryDepth)
                 local castIdx    = n - i                                    -- 0-based, oldest = 0
                 local virtualU   = (3 - convergedPhaseOffset) % 3
                 local blockIdx   = math.floor((castIdx + virtualU) / 3)     -- 0-based block number
@@ -1053,6 +1059,7 @@ local function resetState()
     penanceHistory             = {}
     predictor                  = DeckPredictor_new()
     predictorBreakCount        = 0
+    predictorHistoryDepth      = 0
     shieldActive               = false
     pendingCheck               = false
     shieldActiveOnCast         = false
@@ -1141,6 +1148,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             penanceHistory     = {}
             eventLog           = {}
             predictorBreakCount = 0
+            predictorHistoryDepth = 0
             pendingCheck       = false
             shieldActiveOnCast = false
             shieldActive       = false
