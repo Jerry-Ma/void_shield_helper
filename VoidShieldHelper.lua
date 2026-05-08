@@ -264,6 +264,8 @@ local function logEvent(msg)
 end
 
 
+local predictorHistoryDepth    = 0   -- how many penanceHistory entries the current predictor has processed
+
 --- Returns nil if every complete block in history has at most 1 PROC (consistent),
 --- or a string describing the first offending block (inconsistent).
 --- Only meaningful when the predictor has converged to a single phase.
@@ -296,7 +298,6 @@ end
 
 local predictor                = DeckPredictor_new()
 local predictorBreakCount      = 0   -- how many times the predictor auto-reset due to a broken sequence
-local predictorHistoryDepth    = 0   -- how many penanceHistory entries the current predictor has processed
 
 local debugFrame               = nil
 local forecastFrame            = nil
