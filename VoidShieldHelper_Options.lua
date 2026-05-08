@@ -608,6 +608,11 @@ local function buildOptionsFrame()
         "%d ms")
     table.insert(widgets, wProcDelay)
 
+    local wPrune = makeCheckbox(pGen, "Prune offsets on zone entry", -258,
+        function() return db.pruneOffsetOnZone or false end,
+        function(v) db.pruneOffsetOnZone = v end)
+    table.insert(widgets, wPrune)
+
     sectionHeader(pGen, "Colours", -286)
 
     local refreshBar  -- forward ref; assigned below once segments are built
