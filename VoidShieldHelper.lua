@@ -520,13 +520,16 @@ local function createForecastFrame()
     return f
 end
 
--- Colour stops for the gradient (exclusive of the 0 and 1 special endpoints).
--- Each stop: { threshold 0-1, r, g, b }
+-- Colour stops for the smooth gradient.
+-- Each stop is anchored at the MID-POINT of the corresponding discrete colour
+-- range, so the gradient shows the "pure" colour at the same probability where
+-- discrete mode would show it.  Discrete ranges: orange [0,30%), yellow [30,60%),
+-- green [60,100%] → midpoints 15%, 45%, 80%.
+-- Each entry: { prob 0-1, r, g, b }
 local PROB_STOPS = {
-    { 0.00, 1.0, 0.5, 0.0 },   -- orange  (just above 0%)
-    { 0.30, 0.9, 0.9, 0.1 },   -- yellow
-    { 0.60, 0.1, 0.9, 0.1 },   -- green
-    { 1.00, 0.1, 0.9, 0.1 },   -- green  (just below 100%, not cyan)
+    { 0.15, 1.0, 0.5, 0.0 },   -- orange  (mid of 0–30% range)
+    { 0.45, 0.9, 0.9, 0.1 },   -- yellow  (mid of 30–60% range)
+    { 0.80, 0.1, 0.9, 0.1 },   -- green   (mid of 60–100% range)
 }
 
 local function lerpColor(r1, g1, b1, r2, g2, b2, t)
@@ -540,8 +543,11 @@ local function probColor(prob)
 
     local db = VoidShieldHelperDB
     if db and db.smoothColors then
-        -- Smooth gradient between stops (0 and 1 endpoints excluded above)
+        -- Smooth gradient: pure colour at each midpoint, blends at boundaries.
         local s = PROB_STOPS
+        if prob <= s[1][1] then
+            return s[1][2], s[1][3], s[1][4]  -- clamp to first colour
+        end
         for i = 1, #s - 1 do
             local lo, hi = s[i], s[i + 1]
             if prob >= lo[1] and prob <= hi[1] then
@@ -551,7 +557,7 @@ local function probColor(prob)
             end
         end
         local last = s[#s]
-        return last[2], last[3], last[4]
+        return last[2], last[3], last[4]  -- clamp to last colour
     end
 
     -- Discrete mode (default)
