@@ -43,6 +43,8 @@ local PENANCE_DEBOUNCE  = 2.0   -- seconds
 local MAX_HISTORY         = 30
 -- How many of those entries to render in the debug frame (limited by frame height).
 local MAX_DISPLAY_HISTORY = 9
+-- Max raw event log entries kept for the copy-log popup.
+local MAX_EVENT_LOG       = 60
 
 -- Result constants
 local RESULT_PROC     = "PROC"
@@ -213,6 +215,30 @@ local lastPenanceTime          = 0      -- time of last counted penance cast
 -- plain result strings (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first
 local penanceHistory           = {}
 
+-- ─── Mechanism B state (CHANNEL_START + SUCCEEDED) ────────────────────────────
+-- Parallel tracker using UNIT_SPELLCAST_CHANNEL_START to detect cast start
+-- and UNIT_SPELLCAST_SUCCEEDED to confirm the first bolt.
+-- Runs alongside mechanism A (debounce) for in-game comparison.
+local chPendingCastStart       = false  -- true from CHANNEL_START until first SUCCEEDED
+local chPendingCheck           = false  -- true while waiting for proc-check delay
+local chShieldActiveOnCast     = false  -- shield snapshot at CHANNEL_START
+local chLastSpellID            = 0      -- spell ID that triggered the current channel
+local chHistory                = {}     -- same format as penanceHistory, newest first
+
+-- ─── Shared event log ────────────────────────────────────────────────────────
+-- Ring buffer of plain-text event strings for the copy-log popup, newest first.
+local eventLog                 = {}
+
+--- Prepend a timestamped string to the shared event log.
+local function logEvent(msg)
+    local t = string.format("%.2f", GetTime() % 1000)
+    table.insert(eventLog, 1, string.format("[%s] %s", t, msg))
+    if #eventLog > MAX_EVENT_LOG then
+        eventLog[#eventLog] = nil
+    end
+end
+
+
 --- Returns nil if every complete block in history has at most 1 PROC (consistent),
 --- or a string describing the first offending block (inconsistent).
 --- Only meaningful when the predictor has converged to a single phase.
@@ -377,6 +403,75 @@ local function onPenanceCast()
         recordResult(result)
     end)
 end
+
+-- ─── Mechanism B: CHANNEL_START + SUCCEEDED tracker ──────────────────────────
+-- Separate history fed by CHANNEL_START (cast start) + SUCCEEDED (first bolt).
+-- Does NOT touch penanceHistory or the forecast display.
+-- Results stored in chHistory for debug comparison only.
+
+--- Push a result into chHistory (newest first, capped at MAX_HISTORY).
+local function chRecordResult(result)
+    table.insert(chHistory, 1, result)
+    if #chHistory > MAX_HISTORY then
+        chHistory[#chHistory] = nil
+    end
+    logEvent(string.format("[B] recorded %s  (total=%d)", result, #chHistory))
+    updateDebugDisplay()
+end
+
+--- Called when CHANNEL_START fires for a Penance spell ID.
+local function onChCastStart(spellID)
+    chLastSpellID = spellID
+    if chPendingCheck then
+        -- Previous cast's check still running: force-complete it now.
+        logEvent("[B] CHANNEL_START while check pending; force-completing")
+        chPendingCheck = false
+        pollShieldState()
+        local forceResult
+        if chShieldActiveOnCast then
+            forceResult = RESULT_UNKNOWN
+        elseif shieldActive then
+            forceResult = RESULT_PROC
+        else
+            forceResult = RESULT_NO_PROC
+        end
+        chRecordResult(forceResult)
+    end
+    chPendingCastStart   = true
+    chPendingCheck       = false
+    pollShieldState()
+    chShieldActiveOnCast = shieldActive
+    logEvent(string.format("[B] CHANNEL_START %d shield=%s", spellID,
+        shieldActive and "Y" or "N"))
+    updateDebugDisplay()
+end
+
+--- Called when SUCCEEDED fires for a Penance bolt spell ID.
+-- Only the first bolt (while chPendingCastStart=true) triggers the proc check.
+local function onChCastSucceeded(spellID)
+    logEvent(string.format("[B] SUCCEEDED %d pendingStart=%s pendingCheck=%s",
+        spellID,
+        chPendingCastStart and "Y" or "N",
+        chPendingCheck     and "Y" or "N"))
+    if not chPendingCastStart then return end
+    chPendingCastStart = false
+    chPendingCheck     = true
+    C_Timer.After(PROC_CHECK_DELAY, function()
+        if not chPendingCheck then return end
+        chPendingCheck = false
+        pollShieldState()
+        local result
+        if chShieldActiveOnCast then
+            result = RESULT_UNKNOWN
+        elseif shieldActive then
+            result = RESULT_PROC
+        else
+            result = RESULT_NO_PROC
+        end
+        chRecordResult(result)
+    end)
+end
+
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
 -- Three lights: [last cast result] [N+1 probability] [N+2 probability]
 -- N+1 is the primary indicator (full size); LAST and N+2 are smaller.
@@ -652,6 +747,98 @@ local function createDebugFrame()
         f.histLines[i] = line
     end
 
+    -- Mechanism B section
+    local chBaseY = -110 - (MAX_DISPLAY_HISTORY * 18) - 14
+    local chHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    chHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, chBaseY)
+    chHeader:SetText("|cff88ccffMech B history (CH_START+SUCCEEDED):|r")
+
+    f.chHistLines = {}
+    for i = 1, MAX_DISPLAY_HISTORY do
+        local line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, chBaseY - (i * 18))
+        line:SetWidth(212)
+        line:SetJustifyH("LEFT")
+        line:SetText(string.format("#%d: -", i))
+        f.chHistLines[i] = line
+    end
+
+    -- Copy-log button
+    local logBtnY = chBaseY - (MAX_DISPLAY_HISTORY * 18) - 10
+    local logBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    logBtn:SetSize(220, 22)
+    logBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 10, logBtnY)
+    logBtn:SetText("Show Event Log (copy/paste)")
+    logBtn:SetScript("OnClick", function()
+        local lines = {}
+        lines[#lines+1] = "=== Mechanism A (debounce) history ==="
+        for i = 1, #penanceHistory do
+            lines[#lines+1] = string.format("#%d: %s", i, penanceHistory[i])
+        end
+        lines[#lines+1] = ""
+        lines[#lines+1] = "=== Mechanism B (CH_START+SUCCEEDED) history ==="
+        for i = 1, #chHistory do
+            lines[#lines+1] = string.format("#%d: %s", i, chHistory[i])
+        end
+        lines[#lines+1] = ""
+        lines[#lines+1] = "=== Event log (newest first) ==="
+        for i = 1, #eventLog do
+            lines[#lines+1] = eventLog[i]
+        end
+        local text = table.concat(lines, "\n")
+
+        if not f.logPopup then
+            local pop = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+            pop:SetSize(500, 400)
+            pop:SetPoint("CENTER")
+            pop:SetBackdrop({
+                bgFile   = "Interface\\Buttons\\WHITE8x8",
+                edgeFile = "Interface\\Buttons\\WHITE8x8",
+                edgeSize = 1, tile = true, tileSize = 16,
+            })
+            pop:SetBackdropColor(0, 0, 0, 0.92)
+            pop:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+            pop:SetFrameStrata("DIALOG")
+            pop:EnableMouse(true)
+            pop:SetMovable(true)
+            pop:RegisterForDrag("LeftButton")
+            pop:SetScript("OnDragStart", function(self) self:StartMoving() end)
+            pop:SetScript("OnDragStop",  function(self) self:StopMovingOrSizing() end)
+
+            local hdr = pop:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+            hdr:SetPoint("TOP", pop, "TOP", 0, -8)
+            hdr:SetText("Debug Log")
+
+            local hint = pop:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+            hint:SetPoint("TOP", pop, "TOP", 0, -26)
+            hint:SetText("|cff888888Ctrl-A to select all, Ctrl-C to copy|r")
+
+            local scroll = CreateFrame("ScrollFrame", nil, pop, "UIPanelScrollFrameTemplate")
+            scroll:SetPoint("TOPLEFT",  pop, "TOPLEFT",  10, -46)
+            scroll:SetPoint("BOTTOMRIGHT", pop, "BOTTOMRIGHT", -30, 36)
+
+            local eb = CreateFrame("EditBox", nil, scroll)
+            eb:SetMultiLine(true)
+            eb:SetAutoFocus(false)
+            eb:SetFontObject("ChatFontNormal")
+            eb:SetWidth(scroll:GetWidth())
+            eb:SetScript("OnEscapePressed", function() pop:Hide() end)
+            scroll:SetScrollChild(eb)
+            pop.editBox = eb
+
+            local closeBtn = CreateFrame("Button", nil, pop, "UIPanelButtonTemplate")
+            closeBtn:SetSize(80, 22)
+            closeBtn:SetPoint("BOTTOM", pop, "BOTTOM", 0, 8)
+            closeBtn:SetText("Close")
+            closeBtn:SetScript("OnClick", function() pop:Hide() end)
+
+            f.logPopup = pop
+        end
+        f.logPopup.editBox:SetText(text)
+        f.logPopup.editBox:SetCursorPosition(0)
+        f.logPopup:Show()
+    end)
+
     f:Show()
     return f
 end
@@ -763,6 +950,32 @@ updateDebugDisplay = function()
             debugFrame.histLines[i]:SetText(string.format("%s: %s%s|r", indexLabel, resultColor, result))
         else
             debugFrame.histLines[i]:SetText(string.format("|cff888888#%d: —|r", i))
+        end
+    end
+
+    -- Mechanism B pending state
+    if debugFrame.pendingLabel then
+        if chPendingCastStart then
+            debugFrame.pendingLabel:SetText(debugFrame.pendingLabel:GetText()
+                .. "  |cff88ccff[B:waiting SUCCEEDED]|r")
+        elseif chPendingCheck then
+            debugFrame.pendingLabel:SetText((debugFrame.pendingLabel:GetText() or "")
+                .. "  |cff88ccff[B:check pending]|r")
+        end
+    end
+
+    -- Mechanism B history
+    if debugFrame.chHistLines then
+        for i = 1, MAX_DISPLAY_HISTORY do
+            local result = chHistory[i]
+            if result then
+                local c = RESULT_COLOR[result] or "|cffffffff"
+                debugFrame.chHistLines[i]:SetText(
+                    string.format("|cff888888#%d|r: %s%s|r", i, c, result))
+            else
+                debugFrame.chHistLines[i]:SetText(
+                    string.format("|cff888888#%d: -|r", i))
+            end
         end
     end
 end
@@ -893,6 +1106,14 @@ local function resetState()
     pendingCheck               = false
     shieldActiveOnCast         = false
     lastPenanceTime            = 0
+    -- Mechanism B
+    chHistory                  = {}
+    chPendingCastStart         = false
+    chPendingCheck             = false
+    chShieldActiveOnCast       = false
+    chLastSpellID              = 0
+    -- Shared
+    eventLog                   = {}
     watchSlot                  = nil
     iterationsUntilSlotRefresh = 0
 end
@@ -906,6 +1127,9 @@ eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- mechanism B
+eventFrame:RegisterEvent("UNIT_SPELLCAST_START")          -- mechanism B (non-channeled)
+eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -991,7 +1215,30 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         local unit, _, spellID = ...
         if unit ~= "player" then return end
         if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCast()
+            onPenanceCast()           -- mechanism A (debounce)
+            onChCastSucceeded(spellID) -- mechanism B
+        else
+            logEvent(string.format("SUCCEEDED %d (no match)", spellID))
         end
+
+    elseif event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_START" then
+        if not isDiscPriest then return end
+        local unit, _, spellID = ...
+        if unit ~= "player" then return end
+        if PENANCE_SPELL_IDS[spellID] then
+            onChCastStart(spellID)     -- mechanism B only
+        else
+            logEvent(string.format("%s %d (no match)",
+                event == "UNIT_SPELLCAST_CHANNEL_START" and "CH_START" or "START",
+                spellID))
+        end
+
+    elseif event == "ACTIONBAR_SLOT_CHANGED" then
+        local prevSlot = watchSlot
+        refreshWatchSlot()
+        if watchSlot ~= prevSlot then
+            updateDebugDisplay()
+        end
+
     end
 end)
