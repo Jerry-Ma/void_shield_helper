@@ -444,7 +444,7 @@ local optionsFrame = nil
 local function buildOptionsFrame()
     local SIDEBAR_W = 75
     local TOTAL_W   = SIDEBAR_W + PANEL_W  -- 375
-    local PANEL_H   = 460
+    local PANEL_H   = 490
     local TITLE_H   = 26
     local TAB_H     = 30
 
@@ -645,7 +645,7 @@ local function buildOptionsFrame()
 
     local prevLbl = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     prevLbl:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, barY)
-    prevLbl:SetText("Colour preview (0 â 100%)")
+    prevLbl:SetText("Colour preview  (0 -- 100%)")
     prevLbl:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
 
     local barY2 = barY - 16
