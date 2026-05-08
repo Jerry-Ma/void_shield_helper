@@ -35,8 +35,7 @@ local ACTION_BUTTON_PREFIXES = {
 -- How long after a penance UNIT_SPELLCAST_SUCCEEDED we wait before reading the
 -- action-button texture to determine if a proc happened.
 local PROC_CHECK_DELAY  = 0.2   -- seconds
--- Minimum gap between two counted penance casts (guards against multi-bolt events).
-local PENANCE_DEBOUNCE  = 2.0   -- seconds
+-- (No debounce needed: UNIT_SPELLCAST_START fires once per cast, not once per bolt.)
 -- How many penance results to keep in the rolling history.
 -- How many penance results to keep in the rolling log (purely for display).
 -- No game-mechanic reason to cap this; just controls memory used by the table.
@@ -206,9 +205,9 @@ local iterationsUntilSlotRefresh = 0
 
 local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visible
 
+local pendingCastStart         = false  -- true from UNIT_SPELLCAST_START until first SUCCEEDED
 local pendingCheck             = false  -- true while waiting for PROC_CHECK_DELAY
 local shieldActiveOnCast       = false  -- snapshot of shieldActive at penance cast
-local lastPenanceTime          = 0      -- time of last counted penance cast
 
 -- plain result strings (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first
 local penanceHistory           = {}
@@ -337,44 +336,54 @@ local function recordResult(result)
     updateForecastDisplay()
 end
 
---- Called once per logical penance cast (debounced).
--- Snapshots the current shield state, then after a short delay reads the
--- texture again to classify the cast as PROC / NO_PROC / UNKNOWN.
+-- Shared helper: read shield texture and record a result for the cast whose
+-- pre-cast snapshot is in shieldActiveOnCast.
+local function finishPendingCheck()
+    pendingCheck = false
+    pollShieldState()
+    local result
+    if shieldActiveOnCast then
+        result = RESULT_UNKNOWN
+    elseif shieldActive then
+        result = RESULT_PROC
+    else
+        result = RESULT_NO_PROC
+    end
+    recordResult(result)
+end
+
+--- Called on UNIT_SPELLCAST_START for Penance.
+-- Snapshots shield state *before* the cast lands.
+-- If a previous check is still pending (rapid recast), force-completes it first.
 --
 -- State machine:
 --   Case 1: shield was INACTIVE → cast → shield now ACTIVE   → PROC
 --   Case 2: shield was ACTIVE   → cast → (any state)         → UNKNOWN
 --   Case 3: shield was INACTIVE → cast → shield still INACTIVE → NO_PROC
-local function onPenanceCast()
-    local now = GetTime()
-    if now - lastPenanceTime < PENANCE_DEBOUNCE then return end
-    lastPenanceTime = now
+local function onPenanceCastStart()
+    -- If we are still waiting for the previous cast's proc check, force it now
+    -- before overwriting shieldActiveOnCast with the new snapshot.
+    if pendingCheck then
+        finishPendingCheck()
+    end
 
-    -- Snapshot shield state at the moment of the cast.
+    pendingCastStart   = true
     pollShieldState()
     shieldActiveOnCast = shieldActive
-    pendingCheck       = true
     updateDebugDisplay()
+end
+
+--- Called on UNIT_SPELLCAST_SUCCEEDED for Penance.
+-- Penance fires SUCCEEDED once per bolt; pendingCastStart ensures only the
+-- first bolt triggers the check (natural replacement for PENANCE_DEBOUNCE).
+local function onPenanceCastSucceeded()
+    if not pendingCastStart then return end
+    pendingCastStart = false
+    pendingCheck     = true
 
     C_Timer.After(PROC_CHECK_DELAY, function()
         if not pendingCheck then return end
-        pendingCheck = false
-
-        pollShieldState()
-
-        local result
-        if shieldActiveOnCast then
-            -- Shield was already up; impossible to tell if a new proc landed.
-            result = RESULT_UNKNOWN
-        elseif shieldActive then
-            -- Shield was down, now it's up → proc triggered.
-            result = RESULT_PROC
-        else
-            -- Shield was down and is still down → no proc.
-            result = RESULT_NO_PROC
-        end
-
-        recordResult(result)
+        finishPendingCheck()
     end)
 end
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
@@ -905,6 +914,7 @@ eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
+eventFrame:RegisterEvent("UNIT_SPELLCAST_START")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
@@ -986,12 +996,20 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         startTicker()
         updateDebugDisplay()
 
+    elseif event == "UNIT_SPELLCAST_START" then
+        if not isDiscPriest then return end
+        local unit, _, spellID = ...
+        if unit ~= "player" then return end
+        if PENANCE_SPELL_IDS[spellID] then
+            onPenanceCastStart()
+        end
+
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         if not isDiscPriest then return end
         local unit, _, spellID = ...
         if unit ~= "player" then return end
         if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCast()
+            onPenanceCastSucceeded()
         end
     end
 end)
