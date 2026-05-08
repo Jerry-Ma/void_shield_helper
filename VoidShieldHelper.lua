@@ -716,13 +716,11 @@ updateDebugDisplay = function()
     -- PW:S slot info / warning
     if debugFrame.slotLabel then
         if watchSlot then
-            local actionType, id = GetActionInfo(watchSlot)
-            local spellName = id and C_Spell.GetSpellName(id) or "?"
             debugFrame.slotLabel:SetText(string.format(
-                "|cff00ff00PW:S on bar: slot %d (%s)|r", watchSlot, spellName))
+                "|cff00ff00PW:S on bar: slot %d|r", watchSlot))
         else
             debugFrame.slotLabel:SetText(
-                "|cffff4444PW:S not on bar! Add from spellbook.|r")
+                "|cffff4444PW:S not on action bar!|r")
         end
     end
 
