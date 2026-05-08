@@ -41,9 +41,11 @@ local ACTION_BUTTON_PREFIXES = {
     "MultiActionBar4Button",
 }
 
--- How long after a penance UNIT_SPELLCAST_SUCCEEDED we wait before reading the
--- action-button texture to determine if a proc happened.
-local PROC_CHECK_DELAY  = 0.2   -- seconds
+-- How long after CHANNEL_START (mech B) or UNIT_SPELLCAST_SUCCEEDED (mech A)
+-- we wait before reading the action-button texture to detect a proc.
+-- Mech B uses a longer delay (CH_PROC_CHECK_DELAY) to account for server lag.
+local PROC_CHECK_DELAY     = 0.2   -- seconds (mech A)
+local CH_PROC_CHECK_DELAY  = 0.5   -- seconds (mech B, from CHANNEL_START)
 -- Minimum gap between two counted penance casts (guards against multi-bolt events).
 local PENANCE_DEBOUNCE  = 2.0   -- seconds
 -- How many penance results to keep in the rolling history.
@@ -224,12 +226,11 @@ local lastPenanceTime          = 0      -- time of last counted penance cast
 -- plain result strings (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first
 local penanceHistory           = {}
 
--- ─── Mechanism B state (CHANNEL_START + SUCCEEDED) ────────────────────────────
--- Parallel tracker using UNIT_SPELLCAST_CHANNEL_START to detect cast start
--- and UNIT_SPELLCAST_SUCCEEDED to confirm the first bolt.
+-- ─── Mechanism B state (CHANNEL_START only) ────────────────────────────────────
+-- Parallel tracker using UNIT_SPELLCAST_CHANNEL_START alone.
+-- A short delay (CH_PROC_CHECK_DELAY) accounts for server round-trip lag.
 -- Runs alongside mechanism A (debounce) for in-game comparison.
-local chPendingCastStart       = false  -- true from CHANNEL_START until first SUCCEEDED
-local chPendingCheck           = false  -- true while waiting for proc-check delay
+local chPendingCheck           = false  -- true while waiting for CH_PROC_CHECK_DELAY
 local chShieldActiveOnCast     = false  -- shield snapshot at CHANNEL_START
 local chLastSpellID            = 0      -- spell ID that triggered the current channel
 local chHistory                = {}     -- same format as penanceHistory, newest first
@@ -429,10 +430,13 @@ local function chRecordResult(result)
 end
 
 --- Called when CHANNEL_START fires for a Penance spell ID.
+-- Records the shield state immediately, then after CH_PROC_CHECK_DELAY reads
+-- the texture again to determine if the cast triggered a Void Shield proc.
+-- No dependency on SUCCEEDED; the delay covers server round-trip lag.
 local function onChCastStart(spellID)
     chLastSpellID = spellID
     if chPendingCheck then
-        -- Previous cast's check still running: force-complete it now.
+        -- Previous cast's timer still running: force-complete it now.
         logEvent("[B] CHANNEL_START while check pending; force-completing")
         chPendingCheck = false
         pollShieldState()
@@ -446,26 +450,13 @@ local function onChCastStart(spellID)
         end
         chRecordResult(forceResult)
     end
-    chPendingCastStart   = true
     chPendingCheck       = false
     pollShieldState()
     chShieldActiveOnCast = shieldActive
     logEvent(string.format("[B] CHANNEL_START %d shield=%s", spellID,
         shieldActive and "Y" or "N"))
-    updateDebugDisplay()
-end
-
---- Called when SUCCEEDED fires for a Penance bolt spell ID.
--- Only the first bolt (while chPendingCastStart=true) triggers the proc check.
-local function onChCastSucceeded(spellID)
-    logEvent(string.format("[B] SUCCEEDED %d pendingStart=%s pendingCheck=%s",
-        spellID,
-        chPendingCastStart and "Y" or "N",
-        chPendingCheck     and "Y" or "N"))
-    if not chPendingCastStart then return end
-    chPendingCastStart = false
-    chPendingCheck     = true
-    C_Timer.After(PROC_CHECK_DELAY, function()
+    chPendingCheck = true
+    C_Timer.After(CH_PROC_CHECK_DELAY, function()
         if not chPendingCheck then return end
         chPendingCheck = false
         pollShieldState()
@@ -479,6 +470,7 @@ local function onChCastSucceeded(spellID)
         end
         chRecordResult(result)
     end)
+    updateDebugDisplay()
 end
 
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
@@ -964,10 +956,7 @@ updateDebugDisplay = function()
 
     -- Mechanism B pending state
     if debugFrame.pendingLabel then
-        if chPendingCastStart then
-            debugFrame.pendingLabel:SetText(debugFrame.pendingLabel:GetText()
-                .. "  |cff88ccff[B:waiting SUCCEEDED]|r")
-        elseif chPendingCheck then
+        if chPendingCheck then
             debugFrame.pendingLabel:SetText((debugFrame.pendingLabel:GetText() or "")
                 .. "  |cff88ccff[B:check pending]|r")
         end
@@ -1117,7 +1106,6 @@ local function resetState()
     lastPenanceTime            = 0
     -- Mechanism B
     chHistory                  = {}
-    chPendingCastStart         = false
     chPendingCheck             = false
     chShieldActiveOnCast       = false
     chLastSpellID              = 0
@@ -1137,7 +1125,6 @@ eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- mechanism B
-eventFrame:RegisterEvent("UNIT_SPELLCAST_START")          -- mechanism B (non-channeled)
 eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
@@ -1224,25 +1211,19 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         local unit, _, spellID = ...
         if unit ~= "player" then return end
         if PENANCE_SPELL_IDS[spellID] then
-            onPenanceCast()            -- mechanism A (debounce, baseline)
-        end
-        if CH_PENANCE_SPELL_IDS[spellID] then
-            onChCastSucceeded(spellID) -- mechanism B
-        end
-        if not PENANCE_SPELL_IDS[spellID] and not CH_PENANCE_SPELL_IDS[spellID] then
+            onPenanceCast()  -- mechanism A (debounce, baseline)
+        else
             logEvent(string.format("SUCCEEDED %d (no match)", spellID))
         end
 
-    elseif event == "UNIT_SPELLCAST_CHANNEL_START" or event == "UNIT_SPELLCAST_START" then
+    elseif event == "UNIT_SPELLCAST_CHANNEL_START" then
         if not isDiscPriest then return end
         local unit, _, spellID = ...
         if unit ~= "player" then return end
         if CH_PENANCE_SPELL_IDS[spellID] then
-            onChCastStart(spellID)     -- mechanism B only
+            onChCastStart(spellID)  -- mechanism B only
         else
-            logEvent(string.format("%s %d (no match)",
-                event == "UNIT_SPELLCAST_CHANNEL_START" and "CH_START" or "START",
-                spellID))
+            logEvent(string.format("CH_START %d (no match)", spellID))
         end
 
     elseif event == "ACTIONBAR_SLOT_CHANGED" then
