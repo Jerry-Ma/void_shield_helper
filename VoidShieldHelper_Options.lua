@@ -590,12 +590,12 @@ local function buildOptionsFrame()
 
     sectionHeader(pGen, "Scale", -86)
 
-    local wFS = makeSlider(pGen, "Forecast Scale", 0.5, 2.0, 0.05, -104,
+    local wFS = makeSlider(pGen, "Indicator Frame Scale", 0.5, 2.0, 0.05, -104,
         function() return db.forecastScale or 1.0 end,
         function(v) db.forecastScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFS)
 
-    local wDS = makeSlider(pGen, "Debug Scale", 0.5, 2.0, 0.05, -156,
+    local wDS = makeSlider(pGen, "Debug Window Scale", 0.5, 2.0, 0.05, -156,
         function() return db.debugScale or 1.0 end,
         function(v) db.debugScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDS)
