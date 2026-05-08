@@ -645,15 +645,23 @@ local function createDebugFrame()
     statusVal:SetPoint("LEFT", statusLabel, "RIGHT", 6, 0)
     f.statusVal = statusVal
 
+    -- PW:S action-bar slot info / warning
+    local slotLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    slotLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -46)
+    slotLabel:SetWidth(220)
+    slotLabel:SetJustifyH("LEFT")
+    slotLabel:SetText("")
+    f.slotLabel = slotLabel
+
     -- Pending indicator
     local pendingLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    pendingLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -46)
+    pendingLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -60)
     pendingLabel:SetText("")
     f.pendingLabel = pendingLabel
 
     -- Deck prediction probability
     local probLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    probLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -62)
+    probLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -76)
     probLabel:SetWidth(220)
     probLabel:SetJustifyH("LEFT")
     probLabel:SetText("Next proc: —")
@@ -661,7 +669,7 @@ local function createDebugFrame()
 
     -- Phase / break info (second line under prob)
     local phaseLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    phaseLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -78)
+    phaseLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -92)
     phaseLabel:SetWidth(220)
     phaseLabel:SetJustifyH("LEFT")
     phaseLabel:SetText("")
@@ -669,7 +677,7 @@ local function createDebugFrame()
 
     -- History verification (shown when phase converged)
     local verifyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    verifyLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -94)
+    verifyLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -108)
     verifyLabel:SetWidth(220)
     verifyLabel:SetJustifyH("LEFT")
     verifyLabel:SetText("")
@@ -677,14 +685,14 @@ local function createDebugFrame()
 
     -- History section header
     local histHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    histHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -110)
+    histHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -124)
     histHeader:SetText("Penance history (newest first):")
 
     -- History entry lines
     f.histLines = {}
     for i = 1, MAX_DISPLAY_HISTORY do
         local line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -110 - (i * 18))
+        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -124 - (i * 18))
         line:SetWidth(212)
         line:SetJustifyH("LEFT")
         line:SetText(string.format("#%d: —", i))
@@ -692,7 +700,7 @@ local function createDebugFrame()
     end
 
     -- Event log button
-    local logBtnY = -110 - (MAX_DISPLAY_HISTORY * 18) - 10
+    local logBtnY = -124 - (MAX_DISPLAY_HISTORY * 18) - 26
     local logBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     logBtn:SetSize(220, 22)
     logBtn:SetPoint("TOPLEFT", f, "TOPLEFT", 10, logBtnY)
@@ -776,6 +784,19 @@ updateDebugDisplay = function()
         debugFrame.statusVal:SetText("|cff00ff00ACTIVE|r")
     else
         debugFrame.statusVal:SetText("|cffff4444INACTIVE|r")
+    end
+
+    -- PW:S slot info / warning
+    if debugFrame.slotLabel then
+        if watchSlot then
+            local actionType, id = GetActionInfo(watchSlot)
+            local spellName = id and C_Spell.GetSpellName(id) or "?"
+            debugFrame.slotLabel:SetText(string.format(
+                "|cff00ff00PW:S on bar: slot %d (%s)|r", watchSlot, spellName))
+        else
+            debugFrame.slotLabel:SetText(
+                "|cffff4444PW:S not on bar! Add from spellbook.|r")
+        end
     end
 
     -- Pending indicator
