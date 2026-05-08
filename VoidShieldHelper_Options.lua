@@ -619,55 +619,12 @@ local function buildOptionsFrame()
             if refreshBar then refreshBar() end end)
     table.insert(widgets, wSmooth)
 
-    -- Probability preview bar
-    local BAR_W = PANEL_W - 20   -- 280
-    local BAR_H = 14
-    local N_SEG = 40
-    local barY  = -330
-
-    local barBorder = CreateFrame("Frame", nil, pGen, "BackdropTemplate")
-    barBorder:SetSize(BAR_W + 2, BAR_H + 2)
-    barBorder:SetPoint("TOPLEFT", pGen, "TOPLEFT", 9, barY)
-    barBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
-    barBorder:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
-
-    local segs = {}
-    local segW = BAR_W / N_SEG
-    for i = 1, N_SEG do
-        local seg = pGen:CreateTexture(nil, "ARTWORK")
-        seg:SetSize(segW, BAR_H)
-        seg:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + (i - 1) * segW, barY - 1)
-        segs[i] = seg
-    end
-
-    -- Threshold markers at 30% and 60%
-    for _, th in ipairs({ 0.30, 0.60 }) do
-        local mark = pGen:CreateTexture(nil, "OVERLAY")
-        mark:SetSize(1, BAR_H)
-        mark:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + math.floor(th * BAR_W), barY - 1)
-        mark:SetColorTexture(1, 1, 1, 0.7)
-    end
-
-    -- Axis labels
-    local axisY = barY - BAR_H - 4
-    for _, ax in ipairs({
-        { x = 10,                                 text = "0%"   },
-        { x = 10 + math.floor(BAR_W * 0.30) - 6, text = "30%"  },
-        { x = 10 + math.floor(BAR_W * 0.60) - 6, text = "60%"  },
-        { x = 10 + BAR_W - 22,                    text = "100%" },
-    }) do
-        local al = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        al:SetPoint("TOPLEFT", pGen, "TOPLEFT", ax.x, axisY)
-        al:SetText(ax.text)
-        al:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
-    end
-
     -- Special case swatches (outside the gradient range)
-    local specY = axisY - 18
+    local specY = -328
     for _, row in ipairs({
-        { r=0.4, g=0.4, b=0.4, label="n/a  - no data yet"        },
-        { r=0.9, g=0.2, b=0.2, label="  0% - guaranteed no-proc"  },
-        { r=0.0, g=0.9, b=0.9, label="100% - guaranteed proc"     },
+        { r=0.4, g=0.4, b=0.4, label="n/a  - no data yet"       },
+        { r=0.9, g=0.2, b=0.2, label="  0% - guaranteed no-proc" },
+        { r=0.0, g=0.9, b=0.9, label="100% - guaranteed proc"    },
     }) do
         local sw = pGen:CreateTexture(nil, "ARTWORK")
         sw:SetSize(10, 10)
@@ -678,6 +635,55 @@ local function buildOptionsFrame()
         lbl:SetText(row.label)
         lbl:SetTextColor(S.text[1], S.text[2], S.text[3])
         specY = specY - 16
+    end
+
+    -- Probability colour preview bar
+    local BAR_W = PANEL_W - 50   -- 250
+    local BAR_H = 14
+    local N_SEG = 40
+    local barY  = specY - 10
+
+    local prevLbl = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    prevLbl:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10, barY)
+    prevLbl:SetText("Colour preview (0 â 100%)")
+    prevLbl:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+
+    local barY2 = barY - 16
+    local barBorder = CreateFrame("Frame", nil, pGen, "BackdropTemplate")
+    barBorder:SetSize(BAR_W + 2, BAR_H + 2)
+    barBorder:SetPoint("TOPLEFT", pGen, "TOPLEFT", 9, barY2)
+    barBorder:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8x8", edgeSize = 1 })
+    barBorder:SetBackdropBorderColor(0.35, 0.35, 0.35, 1)
+
+    local segs = {}
+    local segW = BAR_W / N_SEG
+    for i = 1, N_SEG do
+        local seg = pGen:CreateTexture(nil, "ARTWORK")
+        seg:SetSize(segW, BAR_H)
+        seg:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + (i - 1) * segW, barY2 - 1)
+        segs[i] = seg
+    end
+
+    -- Threshold markers at 30% and 60%
+    for _, th in ipairs({ 0.30, 0.60 }) do
+        local mark = pGen:CreateTexture(nil, "OVERLAY")
+        mark:SetSize(1, BAR_H)
+        mark:SetPoint("TOPLEFT", pGen, "TOPLEFT", 10 + math.floor(th * BAR_W), barY2 - 1)
+        mark:SetColorTexture(1, 1, 1, 0.7)
+    end
+
+    -- Axis labels
+    local axisY = barY2 - BAR_H - 2
+    for _, ax in ipairs({
+        { x = 10,                                 text = "0%"   },
+        { x = 10 + math.floor(BAR_W * 0.30) - 6, text = "30%"  },
+        { x = 10 + math.floor(BAR_W * 0.60) - 6, text = "60%"  },
+        { x = 10 + BAR_W - 16,                    text = "100%" },
+    }) do
+        local al = pGen:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        al:SetPoint("TOPLEFT", pGen, "TOPLEFT", ax.x, axisY)
+        al:SetText(ax.text)
+        al:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
     end
 
     refreshBar = function()
