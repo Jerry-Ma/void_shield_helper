@@ -53,6 +53,8 @@ end
 local MAX_HISTORY         = 30
 -- How many of those entries to render in the debug frame (limited by frame height).
 local MAX_DISPLAY_HISTORY = 9
+-- How many recent history entries to replay through a fresh predictor on auto-recovery.
+local RECOVERY_REPLAY_WINDOW = 4
 -- Max raw event log entries kept for the copy-log popup.
 local MAX_EVENT_LOG       = 60
 
@@ -96,7 +98,16 @@ end
 --- converges immediately instead of waiting for natural invalidation.
 local function DeckPredictor_pruneToOffset0(self)
     for i, p in ipairs(self.phases) do
-        if i ~= 1 then   -- phases[1] is offset=0
+        if i == 1 then
+            -- Reset offset-0 phase to a clean block start.
+            -- Without this, the stale slotsFilled/minSum/maxSum from the
+            -- previous run causes an impossible sequence on the first new
+            -- cast, triggering auto-recovery and INCONSISTENT warnings.
+            p.isValid     = true
+            p.minSum      = 0
+            p.maxSum      = 0
+            p.slotsFilled = 0
+        else
             p.isValid = false
         end
     end
@@ -253,12 +264,14 @@ local function logEvent(msg)
 end
 
 
+local predictorHistoryDepth    = 0   -- how many penanceHistory entries the current predictor has processed
+
 --- Returns nil if every complete block in history has at most 1 PROC (consistent),
 --- or a string describing the first offending block (inconsistent).
 --- Only meaningful when the predictor has converged to a single phase.
 --- UNKNOWN entries count as 0 procs (worst-case assumption for this check).
 local function verifyHistoryBlocks(convergedPhaseOffset)
-    local n = #penanceHistory
+    local n = math.min(#penanceHistory, predictorHistoryDepth)
     if n == 0 then return nil end
 
     -- virtualUnknowns = slots before the first real cast in the first partial block.
@@ -364,6 +377,7 @@ local function recordResult(result)
         penanceHistory[#penanceHistory] = nil
     end
     local val = result == RESULT_PROC and 1 or (result == RESULT_NO_PROC and 0 or -1)
+    predictorHistoryDepth = math.min(predictorHistoryDepth + 1, MAX_HISTORY)
     DeckPredictor_update(predictor, val)
     -- Auto-recover: if every phase was just killed the observed sequence
     -- violated the deck model (can happen with many UNKNOWNs or a genuine
@@ -373,7 +387,18 @@ local function recordResult(result)
     if prob == nil then
         predictorBreakCount = predictorBreakCount + 1
         predictor = DeckPredictor_new()
-        DeckPredictor_update(predictor, val)
+        -- Replay the most recent RECOVERY_REPLAY_WINDOW entries (oldest first)
+        -- so the phase filter can eliminate offsets inconsistent with recent history,
+        -- rather than restarting with all 3 phases and just the triggering cast.
+        local replayN = math.min(#penanceHistory, RECOVERY_REPLAY_WINDOW)
+        for j = replayN, 1, -1 do
+            local rv = penanceHistory[j] == RESULT_PROC and 1
+                     or (penanceHistory[j] == RESULT_NO_PROC and 0 or -1)
+            DeckPredictor_update(predictor, rv)
+        end
+        -- The predictor only knows about replayN entries; treat older history
+        -- as belonging to a previous run (grey in display, skipped in verify).
+        predictorHistoryDepth = replayN
     end
     updateDebugDisplay()
     updateForecastDisplay()
@@ -824,8 +849,9 @@ updateDebugDisplay = function()
         if result then
             local resultColor = RESULT_COLOR[result] or "|cffffffff"
             local indexLabel
-            if convergedPhaseOffset then
-                local n          = #penanceHistory
+            if convergedPhaseOffset and i <= predictorHistoryDepth then
+                -- Only colour entries the current predictor has processed.
+                local n          = math.min(#penanceHistory, predictorHistoryDepth)
                 local castIdx    = n - i                                    -- 0-based, oldest = 0
                 local virtualU   = (3 - convergedPhaseOffset) % 3
                 local blockIdx   = math.floor((castIdx + virtualU) / 3)     -- 0-based block number
@@ -1034,6 +1060,7 @@ local function resetState()
     penanceHistory             = {}
     predictor                  = DeckPredictor_new()
     predictorBreakCount        = 0
+    predictorHistoryDepth      = 0
     shieldActive               = false
     pendingCheck               = false
     shieldActiveOnCast         = false
@@ -1095,7 +1122,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
         if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
-        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = true  end
+        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
@@ -1114,9 +1141,15 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         stopTicker()
         local db = VoidShieldHelperDB
         if db and db.pruneOffsetOnZone then
-            -- Prune mode: keep the offset-0 phase only; preserve history and predictor.
-            -- Assumes the new instance starts at a clean deck-block boundary.
+            -- Prune mode: keep only the offset-0 phase so the predictor converges
+            -- immediately on the first cast of the new run (assumes a clean block
+            -- boundary).  History and event log are cleared so the debug display
+            -- doesn't inherit stale block-colouring / verify results from the old run.
             DeckPredictor_pruneToOffset0(predictor)
+            penanceHistory     = {}
+            eventLog           = {}
+            predictorBreakCount = 0
+            predictorHistoryDepth = 0
             pendingCheck       = false
             shieldActiveOnCast = false
             shieldActive       = false
