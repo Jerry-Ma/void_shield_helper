@@ -41,11 +41,15 @@ local ACTION_BUTTON_PREFIXES = {
     "MultiActionBar4Button",
 }
 
--- How long after CHANNEL_START (mech B) or UNIT_SPELLCAST_SUCCEEDED (mech A)
--- we wait before reading the action-button texture to detect a proc.
--- Mech B uses a longer delay (CH_PROC_CHECK_DELAY) to account for server lag.
-local PROC_CHECK_DELAY     = 0.2   -- seconds (mech A)
-local CH_PROC_CHECK_DELAY  = 0.5   -- seconds (mech B, from CHANNEL_START)
+-- How long after UNIT_SPELLCAST_SUCCEEDED (mech A) to read the proc texture.
+local PROC_CHECK_DELAY  = 0.2   -- seconds (mech A, fixed)
+-- Mech B delay is user-configurable (DB key: chProcCheckDelayMs, default 200 ms).
+local CH_PROC_CHECK_DELAY_DEFAULT_MS = 200
+local function getChProcCheckDelay()
+    local db = VoidShieldHelperDB
+    local ms = db and db.chProcCheckDelayMs or CH_PROC_CHECK_DELAY_DEFAULT_MS
+    return ms / 1000
+end
 -- Minimum gap between two counted penance casts (guards against multi-bolt events).
 local PENANCE_DEBOUNCE  = 2.0   -- seconds
 -- How many penance results to keep in the rolling history.
@@ -456,7 +460,7 @@ local function onChCastStart(spellID)
     logEvent(string.format("[B] CHANNEL_START %d shield=%s", spellID,
         shieldActive and "Y" or "N"))
     chPendingCheck = true
-    C_Timer.After(CH_PROC_CHECK_DELAY, function()
+    C_Timer.After(getChProcCheckDelay(), function()
         if not chPendingCheck then return end
         chPendingCheck = false
         pollShieldState()

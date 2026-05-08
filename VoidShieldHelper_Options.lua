@@ -746,6 +746,14 @@ local function buildOptionsFrame()
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDBgTex)
 
+    sectionHeader(pDebug, "Mechanism B", -210)
+
+    local wChDelay = makeSlider(pDebug, "Proc Check Delay (ms)", 50, 500, 10, -228,
+        function() return db.chProcCheckDelayMs or 200 end,
+        function(v) db.chProcCheckDelayMs = math.floor(v + 0.5) end,
+        "%d ms")
+    table.insert(widgets, wChDelay)
+
     -- Hint
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
