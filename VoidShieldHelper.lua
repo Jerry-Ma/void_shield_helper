@@ -5,11 +5,14 @@ VSH = VSH or {}
 
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
--- Penance spell IDs fired via UNIT_SPELLCAST_SUCCEEDED.
--- Both IDs are tracked; a 2-second debounce prevents multi-bolt double-counting.
+-- Penance spell IDs.
+-- SUCCEEDED fires the bolt IDs; CHANNEL_START fires the channel ID (47757).
+-- Mech A (debounce) uses the bolt IDs. Mech B (CH_START) uses 47757 for start.
 local PENANCE_SPELL_IDS = {
-    [47540] = true,  -- Penance
-    [47666] = true,  -- Penance (alternate ID)
+    [47540] = true,  -- Penance bolt (SUCCEEDED, damage)
+    [47750] = true,  -- Penance bolt (SUCCEEDED, healing)
+    [47757] = true,  -- Penance channel (CHANNEL_START)
+    [47666] = true,  -- Penance (empowered / Dark Reprimand variant)
 }
 
 -- Power Word: Shield action-button textures.
