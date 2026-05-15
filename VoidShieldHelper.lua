@@ -6,13 +6,24 @@ VSH = VSH or {}
 -- ─── Constants ───────────────────────────────────────────────────────────────
 
 -- Penance spell IDs matched on UNIT_SPELLCAST_CHANNEL_START.
--- 47757 is the canonical channel-start ID; the bolt IDs and empowered
--- variant are included for completeness.
+-- Penance spell chain (per SimulationCraft / SpellData):
+--   47540  base driver cast on enemy  (fires CHANNEL_START for offensive Penance)
+--   47758  damage channel triggered by 47540 (may also surface on CHANNEL_START)
+--   47666  per-bolt tick — damage or healing (fires UNIT_SPELLCAST_SUCCEEDED)
+--   47757  healing channel cast on friendly (fires CHANNEL_START for healing Penance)
+--   47750  per-bolt healing tick (fires UNIT_SPELLCAST_SUCCEEDED)
+-- Dark Reprimand (Disc talent replacing offensive Penance under Shadow Covenant):
+--   373129 base driver (fires CHANNEL_START)
+--   373130 channel triggered by 373129 (may also surface on CHANNEL_START)
+-- All IDs are included so any variant that surfaces on CHANNEL_START is caught.
 local PENANCE_SPELL_IDS = {
-    [47540] = true,  -- Penance bolt (damage)
-    [47750] = true,  -- Penance bolt (healing)
-    [47757] = true,  -- Penance channel start
-    [47666] = true,  -- Penance (empowered / Dark Reprimand variant)
+    [47540]  = true,  -- Penance base driver (enemy / offensive)
+    [47758]  = true,  -- Penance damage channel
+    [47666]  = true,  -- Penance per-bolt tick (damage or healing)
+    [47757]  = true,  -- Penance healing channel (friendly)
+    [47750]  = true,  -- Penance per-bolt healing tick
+    [373129] = true,  -- Dark Reprimand base driver
+    [373130] = true,  -- Dark Reprimand channel
 }
 
 -- Power Word: Shield action-button textures.
