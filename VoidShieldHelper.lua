@@ -308,11 +308,13 @@ local predictorBreakCount      = 0   -- how many times the predictor auto-reset 
 local debugFrame               = nil
 local forecastFrame            = nil
 local ticker                   = nil
+local inCombat                 = false
 
 -- ─── Forward declarations ────────────────────────────────────────────────────
 
 local updateDebugDisplay
 local updateForecastDisplay
+local updateFrameVisibility
 
 -- ─── Texture scanning ────────────────────────────────────────────────────────
 
@@ -480,8 +482,6 @@ local function rebuildLights(f)
     local szSmall = db.lightSizeSmall or LIGHT_SIZE_SMALL_DEFAULT
     local gap     = db.lightGap       or LIGHT_GAP_DEFAULT
 
-    local sizes = { szSmall, szMain, szSmall }
-
     -- Tear down existing lights
     if f.lights then
         for _, light in ipairs(f.lights) do
@@ -491,18 +491,31 @@ local function rebuildLights(f)
     end
     f.lights = {}
 
-    local totalW = szSmall + gap + szMain + gap + szSmall
-    local padding = 8   -- horizontal inset from each edge
-    local frameW  = totalW + padding * 2
-    local frameH  = szMain + 16
-    f:SetSize(frameW, frameH)
+    local padding = 8
+    local sizes, xOffsets, topOffsets
 
-    -- All lights bottom-aligned; shared bottom edge at -8 - szMain from frame top
-    local bottomY    = -(8 + szMain)
-    local topOffsets = { bottomY + szSmall, -8, bottomY + szSmall }
-    local xOffsets   = { padding,
-                         padding + szSmall + gap,
-                         padding + szSmall + gap + szMain + gap }
+    if db.verticalLayout then
+        -- Vertical: small (top) → main (middle) → small (bottom), centered.
+        local frameW = szMain + padding * 2
+        local frameH = szSmall + gap + szMain + gap + szSmall + padding * 2
+        f:SetSize(frameW, frameH)
+        local xSmall = padding + (szMain - szSmall) / 2
+        sizes      = { szSmall, szMain, szSmall }
+        xOffsets   = { xSmall,  padding, xSmall }
+        topOffsets = { -padding,
+                       -(padding + szSmall + gap),
+                       -(padding + szSmall + gap + szMain + gap) }
+    else
+        -- Horizontal: small (left) → main (center) → small (right), bottom-aligned.
+        local totalW = szSmall + gap + szMain + gap + szSmall
+        f:SetSize(totalW + padding * 2, szMain + padding * 2)
+        local bottomY = -(padding + szMain)
+        sizes      = { szSmall, szMain, szSmall }
+        xOffsets   = { padding,
+                       padding + szSmall + gap,
+                       padding + szSmall + gap + szMain + gap }
+        topOffsets = { bottomY + szSmall, -padding, bottomY + szSmall }
+    end
 
     -- Resolve light texture
     local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
@@ -950,6 +963,7 @@ end
 VSH.applySettings         = function() applySettings() end
 VSH.updateForecastDisplay = function() updateForecastDisplay() end
 VSH.rebuildLights         = function() if forecastFrame then rebuildLights(forecastFrame); updateForecastDisplay() end end
+VSH.updateFrameVisibility = function() updateFrameVisibility() end
 VSH.THRESH_LO             = THRESH_LO
 VSH.THRESH_HI             = THRESH_HI
 VSH.probColor             = function(p) return probColor(p) end
@@ -1050,10 +1064,16 @@ local function stopTicker()
     if forecastFrame and forecastFrame:IsShown() then forecastFrame:Hide() end
 end
 
+updateFrameVisibility = function()
+    if not forecastFrame then return end
+    local db = VoidShieldHelperDB or {}
+    forecastFrame:SetShown(isDiscPriest and (not (db.hideOutOfCombat) or inCombat))
+end
+
 local function startTicker()
     if not isDiscPriest then return end
     if ticker then return end
-    if forecastFrame and not forecastFrame:IsShown() then forecastFrame:Show() end
+    updateFrameVisibility()
     local hideDbg = VoidShieldHelperDB and VoidShieldHelperDB.hideDebug
     if debugFrame and not hideDbg and not debugFrame:IsShown() then debugFrame:Show() end
     ticker = C_Timer.NewTicker(0.1, tickUpdate)
@@ -1085,6 +1105,8 @@ eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- detection algorithm
 eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
+eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")        -- entered combat
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")         -- left combat
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -1127,8 +1149,10 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeMain     == nil then db.lightSizeMain     = 24   end
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
-        if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200  end
-        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false end
+        if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200   end
+        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false  end
+        if db.hideOutOfCombat  == nil then db.hideOutOfCombat  = false  end
+        if db.verticalLayout   == nil then db.verticalLayout   = false  end
 
         debugFrame    = createDebugFrame()
         forecastFrame = createForecastFrame()
@@ -1203,6 +1227,14 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if watchSlot ~= prevSlot then
             updateDebugDisplay()
         end
+
+    elseif event == "PLAYER_REGEN_DISABLED" then
+        inCombat = true
+        updateFrameVisibility()
+
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        inCombat = false
+        updateFrameVisibility()
 
     end
 end)
