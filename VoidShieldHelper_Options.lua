@@ -444,7 +444,7 @@ local optionsFrame = nil
 local function buildOptionsFrame()
     local SIDEBAR_W = 75
     local TOTAL_W   = SIDEBAR_W + PANEL_W  -- 375
-    local PANEL_H   = 490
+    local PANEL_H   = 542
     local TITLE_H   = 26
     local TAB_H     = 30
 
@@ -588,36 +588,48 @@ local function buildOptionsFrame()
         function(v) db.locked = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wLck)
 
-    sectionHeader(pGen, "Scale", -86)
+    local wHideOOC = makeCheckbox(pGen, "Hide frame out of combat", -80,
+        function() return db.hideOutOfCombat or false end,
+        function(v) db.hideOutOfCombat = v
+            if VSH.updateFrameVisibility then VSH.updateFrameVisibility() end end)
+    table.insert(widgets, wHideOOC)
 
-    local wFS = makeSlider(pGen, "Indicator Frame Scale", 0.5, 2.0, 0.05, -104,
+    local wVertical = makeCheckbox(pGen, "Vertical layout", -106,
+        function() return db.verticalLayout or false end,
+        function(v) db.verticalLayout = v
+            if VSH.rebuildLights then VSH.rebuildLights() end end)
+    table.insert(widgets, wVertical)
+
+    sectionHeader(pGen, "Scale", -138)
+
+    local wFS = makeSlider(pGen, "Indicator Frame Scale", 0.5, 2.0, 0.05, -156,
         function() return db.forecastScale or 1.0 end,
         function(v) db.forecastScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFS)
 
-    local wDS = makeSlider(pGen, "Debug Window Scale", 0.5, 2.0, 0.05, -156,
+    local wDS = makeSlider(pGen, "Debug Window Scale", 0.5, 2.0, 0.05, -208,
         function() return db.debugScale or 1.0 end,
         function(v) db.debugScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDS)
 
-    sectionHeader(pGen, "Detection", -212)
+    sectionHeader(pGen, "Detection", -264)
 
-    local wProcDelay = makeSlider(pGen, "Proc check delay (ms)", 50, 500, 10, -230,
+    local wProcDelay = makeSlider(pGen, "Proc check delay (ms)", 50, 500, 10, -282,
         function() return db.procCheckDelayMs or 200 end,
         function(v) db.procCheckDelayMs = math.floor(v + 0.5) end,
         "%d ms")
     table.insert(widgets, wProcDelay)
 
-    local wPrune = makeCheckbox(pGen, "Prune offsets on zone entry", -258,
+    local wPrune = makeCheckbox(pGen, "Prune offsets on zone entry", -310,
         function() return db.pruneOffsetOnZone or false end,
         function(v) db.pruneOffsetOnZone = v end)
     table.insert(widgets, wPrune)
 
-    sectionHeader(pGen, "Colours", -286)
+    sectionHeader(pGen, "Colours", -338)
 
     local refreshBar  -- forward ref; assigned below once segments are built
 
-    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -304,
+    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -356,
         function() return db.smoothColors or false end,
         function(v) db.smoothColors = v
             if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end
@@ -625,7 +637,7 @@ local function buildOptionsFrame()
     table.insert(widgets, wSmooth)
 
     -- Special case swatches (outside the gradient range)
-    local specY = -328
+    local specY = -380
     for _, row in ipairs({
         { r=0.4, g=0.4, b=0.4, label="n/a  - no data yet"       },
         { r=0.9, g=0.2, b=0.2, label="  0% - guaranteed no-proc" },
