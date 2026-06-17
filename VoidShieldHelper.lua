@@ -1064,7 +1064,7 @@ local function stopTicker()
     if forecastFrame and forecastFrame:IsShown() then forecastFrame:Hide() end
 end
 
-local function updateFrameVisibility()
+updateFrameVisibility = function()
     if not forecastFrame then return end
     local db = VoidShieldHelperDB or {}
     forecastFrame:SetShown(isDiscPriest and (not (db.hideOutOfCombat) or inCombat))
