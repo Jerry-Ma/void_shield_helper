@@ -314,6 +314,7 @@ local inCombat                 = false
 
 local updateDebugDisplay
 local updateForecastDisplay
+local updateFrameVisibility
 
 -- ─── Texture scanning ────────────────────────────────────────────────────────
 
