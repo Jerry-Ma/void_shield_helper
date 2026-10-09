@@ -928,7 +928,7 @@ local RESULT_COLOR = {
 
 local function createDebugFrame()
     local f = CreateFrame("Frame", "VoidShieldHelperDebugFrame", UIParent, "BackdropTemplate")
-    f:SetSize(240, 328)
+    f:SetSize(240, 338)
 
     if VoidShieldHelperDB.pos then
         local p = VoidShieldHelperDB.pos
@@ -1026,10 +1026,18 @@ local function createDebugFrame()
         f.histLines[i] = line
     end
 
-    -- Bottom hint
+    -- Options button (same as /vsh)
+    local optBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    optBtn:SetSize(80, 20)
+    optBtn:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -6, 6)
+    optBtn:SetText("Options")
+    optBtn:SetScript("OnClick", function()
+        if VSH.toggleOptions then VSH.toggleOptions() end
+    end)
+
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -8, 5)
-    hint:SetText("|cff888888/vsh  to open options|r")
+    hint:SetPoint("RIGHT", optBtn, "LEFT", -6, 0)
+    hint:SetText("|cff888888/vsh|r")
 
     f:Show()
     return f
