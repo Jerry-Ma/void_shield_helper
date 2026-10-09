@@ -639,12 +639,15 @@ end
 -- The frame is a row (horizontal layout) or column (vertical layout) of four
 -- logical slots, one per card of the 4-cast deck:
 --   [status] [N+1] [N+2] [N+3]
+-- All geometry is described relative to the layout axis, so settings mean the
+-- same thing in either layout:
+--   ALONG  = the direction the slots run (x when horizontal, y when vertical)
+--   ACROSS = perpendicular to it
 -- Slot 1 holds the STATUS lights, one per Void Shield charge, splitting the
--- slot's total width x height.  db.statusStack picks their direction relative
--- to the main layout: "opposite" (default) stacks across it, "same" runs along
--- it.  A column fills from the bottom, a row from the left.  At the charge cap
--- with a possible proc on the next cast they play the action-bar proc glow:
--- spend a charge first, or that proc is wasted.
+-- slot's along x across extent.  db.statusStack stacks them "across" the
+-- layout (default) or "along" it.  A column fills from the bottom, a row from
+-- the left.  At the charge cap with a possible proc on the next cast they play
+-- the action-bar proc glow: spend a charge first, or that proc is wasted.
 -- Slots 2-4 hold the PREDICTION lights; N+1 is the primary (full size).
 -- Every slot is aligned across the layout axis by db.lightAlign:
 --   "start" = top / left, "center", "end" = bottom / right.
@@ -652,10 +655,10 @@ end
 local LIGHT_SIZE_MAIN_DEFAULT  = 24
 local LIGHT_SIZE_SMALL_DEFAULT = 16
 local LIGHT_GAP_DEFAULT        = 14   -- between logical slots
-local STATUS_WIDTH_DEFAULT     = 11   -- whole status slot, all charges
-local STATUS_HEIGHT_DEFAULT    = 24
+local STATUS_ALONG_DEFAULT     = 11   -- whole status slot, all charges
+local STATUS_ACROSS_DEFAULT    = 24
 local STATUS_GAP_DEFAULT       = 2    -- between stacked status lights
-local STATUS_STACK_DEFAULT     = "opposite"
+local STATUS_STACK_DEFAULT     = "across"
 local LIGHT_ALIGN_DEFAULT      = "end"
 local NUM_SLOTS                = 4
 local FRAME_PADDING            = 8
@@ -713,8 +716,8 @@ local function rebuildLights(f)
     local szMain   = db.lightSizeMain  or LIGHT_SIZE_MAIN_DEFAULT
     local szSmall  = db.lightSizeSmall or LIGHT_SIZE_SMALL_DEFAULT
     local gap      = db.lightGap       or LIGHT_GAP_DEFAULT
-    local statW    = db.statusWidth    or STATUS_WIDTH_DEFAULT
-    local statH    = db.statusHeight   or STATUS_HEIGHT_DEFAULT
+    local statAlong  = db.statusAlong  or STATUS_ALONG_DEFAULT
+    local statAcross = db.statusAcross or STATUS_ACROSS_DEFAULT
     local statGap  = db.statusGap      or STATUS_GAP_DEFAULT
     local align    = db.lightAlign     or LIGHT_ALIGN_DEFAULT
     local vertical = db.verticalLayout
@@ -729,8 +732,6 @@ local function rebuildLights(f)
     f.slots, f.lights, f.statusLights = {}, {}, {}
 
     -- Each slot's extent ALONG the layout axis and ACROSS it.
-    local statAlong, statAcross = statW, statH
-    if vertical then statAlong, statAcross = statH, statW end
     local along  = { statAlong,  szMain, szSmall, szSmall }
     local across = { statAcross, szMain, szSmall, szSmall }
     local span, crossMax = gap * (NUM_SLOTS - 1), 0
@@ -775,15 +776,17 @@ local function rebuildLights(f)
         f.lights[i - 1] = light
     end
 
-    -- Status lights split slot 1 (statW x statH) into one light per charge.
-    -- "opposite" stacks across the main layout, "same" runs along it; a
+    -- Status lights split slot 1 (statAlong x statAcross) into one light per
+    -- charge, stacked across the layout (default) or along it.  On screen a
     -- column fills upward from the bottom, a row rightward from the left.
-    local stackSame = (db.statusStack or STATUS_STACK_DEFAULT) == "same"
-    local column    = (stackSame and vertical) or (not stackSame and not vertical)
-    local stackLen  = column and statH or statW
-    local each      = math.max(1, (stackLen - statGap * (MAX_CHARGES - 1)) / MAX_CHARGES)
-    local lightW    = column and statW or each
-    local lightH    = column and each or statH
+    local stackAlong = (db.statusStack or STATUS_STACK_DEFAULT) == "along"
+    local stackLen   = stackAlong and statAlong or statAcross
+    local each       = math.max(1, (stackLen - statGap * (MAX_CHARGES - 1)) / MAX_CHARGES)
+    local lAlong     = stackAlong and each or statAlong
+    local lAcross    = stackAlong and statAcross or each
+    local lightW     = vertical and lAcross or lAlong
+    local lightH     = vertical and lAlong or lAcross
+    local column     = (stackAlong and vertical) or (not stackAlong and not vertical)
     local sbs = db.statusBorderSize or 1
     local statTex = fetchStatusbar(db.statusTexName)
     for i = 1, MAX_CHARGES do
@@ -1437,11 +1440,13 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightAlign        == nil then db.lightAlign        = "end" end
         -- Status (charge) lights
         if db.statusTexName     == nil then db.statusTexName     = ""   end
-        if db.statusWidth       == nil then db.statusWidth       = 11   end
-        if db.statusHeight      == nil then db.statusHeight      = 24   end
+        -- Drop keys from pre-release builds of this layout.
+        db.statusSize, db.statusWidth, db.statusHeight = nil, nil, nil
+        if db.statusStack ~= "along" and db.statusStack ~= "across" then db.statusStack = nil end
+        if db.statusAlong       == nil then db.statusAlong       = 11   end
+        if db.statusAcross      == nil then db.statusAcross      = 24   end
         if db.statusGap         == nil then db.statusGap         = 2    end
-        if db.statusStack       == nil then db.statusStack       = "opposite" end
-        db.statusSize = nil  -- superseded by statusWidth / statusHeight
+        if db.statusStack       == nil then db.statusStack       = "across" end
         if db.statusOnR         == nil then db.statusOnR         = 0    end
         if db.statusOnG         == nil then db.statusOnG         = 0.9  end
         if db.statusOnB         == nil then db.statusOnB         = 0.9  end

@@ -808,16 +808,23 @@ local function buildOptionsFrame()
         function(v) db.verticalLayout = v; rebuild() end)
     table.insert(widgets, wVertical)
 
-    local wAlign = makeChoice(pLayout, "Slot alignment  (start = top / left)", -54,
+    local wAlign = makeChoice(pLayout, "Alignment across  (start = top / left)", -54,
         { { "start", "Start" }, { "center", "Center" }, { "end", "End" } },
         function() return db.lightAlign or "end" end,
         function(v) db.lightAlign = v; rebuild() end)
     table.insert(widgets, wAlign)
 
-    local wLGap = makeSlider(pLayout, "Slot Spacing", 0, 40, 1, -106,
+    local wLGap = makeSlider(pLayout, "Spacing along", 0, 40, 1, -106,
         function() return db.lightGap or 14 end,
         function(v) db.lightGap = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wLGap)
+
+    local layoutHint = pLayout:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    layoutHint:SetPoint("TOPLEFT", pLayout, "TOPLEFT", 10, -162)
+    layoutHint:SetWidth(PANEL_W - 20)
+    layoutHint:SetJustifyH("LEFT")
+    layoutHint:SetText("Along = the direction the four slots run (left to right, or top to bottom when vertical). Across = perpendicular to it. Sizes set this way keep their meaning when you switch layout.")
+    layoutHint:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
 
     -- ── Tab 4: Prediction lights (N+1, N+2, N+3) ─────────────────────────────
     local pLights = addTab("Prediction")
@@ -856,7 +863,8 @@ local function buildOptionsFrame()
     table.insert(widgets, wLBrdSz)
 
     -- ── Tab 5: Status lights (Void Shield charges) ───────────────────────────
-    -- One light per charge, splitting the slot's total width x height.
+    -- One light per charge, splitting the slot's total along x across extent.
+    -- Along / across are relative to the main layout (see the Layout tab).
     local pStatus = addTab("Status")
 
     sectionHeader(pStatus, "Texture", -10)
@@ -868,24 +876,24 @@ local function buildOptionsFrame()
 
     sectionHeader(pStatus, "Size & Stacking  (all charges together)", -84)
 
-    local wSW = makeSlider(pStatus, "Total Width", 4, 60, 1, -102,
-        function() return db.statusWidth or 11 end,
-        function(v) db.statusWidth = math.floor(v+0.5); rebuild() end, "%d")
-    table.insert(widgets, wSW)
+    local wSAlong = makeSlider(pStatus, "Total size along", 4, 60, 1, -102,
+        function() return db.statusAlong or 11 end,
+        function(v) db.statusAlong = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wSAlong)
 
-    local wSH = makeSlider(pStatus, "Total Height", 4, 60, 1, -154,
-        function() return db.statusHeight or 24 end,
-        function(v) db.statusHeight = math.floor(v+0.5); rebuild() end, "%d")
-    table.insert(widgets, wSH)
+    local wSAcross = makeSlider(pStatus, "Total size across", 4, 60, 1, -154,
+        function() return db.statusAcross or 24 end,
+        function(v) db.statusAcross = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wSAcross)
 
     local wSGap = makeSlider(pStatus, "Stack Spacing", 0, 20, 1, -206,
         function() return db.statusGap or 2 end,
         function(v) db.statusGap = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wSGap)
 
-    local wSStack = makeChoice(pStatus, "Stack direction  (vs. main layout)", -258,
-        { { "opposite", "Opposite" }, { "same", "Same" } },
-        function() return db.statusStack or "opposite" end,
+    local wSStack = makeChoice(pStatus, "Stack charges", -258,
+        { { "across", "Across" }, { "along", "Along" } },
+        function() return db.statusStack or "across" end,
         function(v) db.statusStack = v; rebuild() end)
     table.insert(widgets, wSStack)
 
