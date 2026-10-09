@@ -17,6 +17,11 @@
 - New options: slot alignment (start / center / end), separate slot spacing and status stack spacing, and separate texture, total size along / across, stack direction, colours and border for status lights. Options are reorganised into Layout, Prediction and Status tabs.
 - Debug window shows the charge count, N+3, and whether the Cooldown Manager is tracking the Void Shield buff; the event log records charges per cast.
 
+### Defaults (new installs only; existing settings are kept)
+- Forecast frame starts at screen centre with a transparent, borderless backdrop; the debug window starts just to its right. Both unlocked, so the debug window's new **Options** button is reachable straight away.
+- Smooth gradient colours and "prune offsets on zone entry" are on by default; slot spacing 9, status slot 16 along × 24 across with a 1px stack gap.
+- Locked frames are now fully click-through.
+
 Mechanics adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) v2.3.0.
 
 ---

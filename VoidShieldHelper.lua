@@ -260,6 +260,53 @@ end
 
 VoidShieldHelperDB = VoidShieldHelperDB or {}
 
+-- Defaults for a fresh install, filled into any missing key on ADDON_LOADED.
+-- Frames start unlocked with the debug window shown, so a new user can reach
+-- the Options button straight away.  Positions are deliberately absent: the
+-- forecast frame defaults to screen centre and the debug window to its right.
+local DB_DEFAULTS = {
+    -- General
+    locked            = false,
+    hideDebug         = false,
+    hideOutOfCombat   = false,
+    forecastScale     = 1.0,
+    debugScale        = 1.0,
+    procCheckDelayMs  = 200,
+    pruneOffsetOnZone = true,
+    smoothColors      = true,
+    -- Forecast frame backdrop (transparent, borderless)
+    backdropBg   = "",
+    bgColorR     = 0,    bgColorG     = 0,    bgColorB     = 0,    bgColorA     = 0,
+    borderSize   = 0,
+    borderColorR = 0.32, borderColorG = 0.32, borderColorB = 0.32, borderColorA = 1,
+    -- Layout
+    verticalLayout = false,
+    lightAlign     = "end",
+    lightGap       = 9,
+    -- Prediction lights
+    lightTexName    = "",
+    lightSizeMain   = 24,
+    lightSizeSmall  = 16,
+    lightBorderSize = 1,
+    lightBorderR = 0, lightBorderG = 0, lightBorderB = 0, lightBorderA = 1,
+    -- Status (charge) lights
+    statusTexName    = "",
+    statusAlong      = 16,
+    statusAcross     = 24,
+    statusGap        = 1,
+    statusStack      = "across",
+    statusOnR  = 0,   statusOnG  = 0.9, statusOnB  = 0.9,
+    statusOffR = 0.3, statusOffG = 0.3, statusOffB = 0.3,
+    statusBorderSize = 1,
+    statusBorderR = 0, statusBorderG = 0, statusBorderB = 0, statusBorderA = 1,
+    -- Debug window
+    debugBgTex      = "",
+    debugBgR        = 0,    debugBgG        = 0,    debugBgB        = 0,    debugBgA        = 0.82,
+    debugBorderSize = 1,
+    debugBorderR    = 0.32, debugBorderG    = 0.32, debugBorderB    = 0.32, debugBorderA    = 1,
+}
+VSH.DEFAULTS = DB_DEFAULTS
+
 -- ─── Runtime state ───────────────────────────────────────────────────────────
 
 local isDiscPriest             = false
@@ -651,15 +698,15 @@ end
 -- Slots 2-4 hold the PREDICTION lights; N+1 is the primary (full size).
 -- Every slot is aligned across the layout axis by db.lightAlign:
 --   "start" = top / left, "center", "end" = bottom / right.
--- Default sizes/gaps; overridden by DB at runtime.
-local LIGHT_SIZE_MAIN_DEFAULT  = 24
-local LIGHT_SIZE_SMALL_DEFAULT = 16
-local LIGHT_GAP_DEFAULT        = 14   -- between logical slots
-local STATUS_ALONG_DEFAULT     = 11   -- whole status slot, all charges
-local STATUS_ACROSS_DEFAULT    = 24
-local STATUS_GAP_DEFAULT       = 2    -- between stacked status lights
-local STATUS_STACK_DEFAULT     = "across"
-local LIGHT_ALIGN_DEFAULT      = "end"
+-- Sizes/gaps come from the DB; DB_DEFAULTS is the single source of defaults.
+local LIGHT_SIZE_MAIN_DEFAULT  = DB_DEFAULTS.lightSizeMain
+local LIGHT_SIZE_SMALL_DEFAULT = DB_DEFAULTS.lightSizeSmall
+local LIGHT_GAP_DEFAULT        = DB_DEFAULTS.lightGap      -- between logical slots
+local STATUS_ALONG_DEFAULT     = DB_DEFAULTS.statusAlong   -- whole status slot, all charges
+local STATUS_ACROSS_DEFAULT    = DB_DEFAULTS.statusAcross
+local STATUS_GAP_DEFAULT       = DB_DEFAULTS.statusGap     -- between stacked status lights
+local STATUS_STACK_DEFAULT     = DB_DEFAULTS.statusStack
+local LIGHT_ALIGN_DEFAULT      = DB_DEFAULTS.lightAlign
 local NUM_SLOTS                = 4
 local FRAME_PADDING            = 8
 local WHITE_TEX                = "Interface\\Buttons\\WHITE8x8"
@@ -810,7 +857,7 @@ local function createForecastFrame()
         local p = VoidShieldHelperDB.forecastPos
         f:SetPoint(p.point, UIParent, p.relPoint, p.x, p.y)
     else
-        f:SetPoint("CENTER", 0, 100)
+        f:SetPoint("CENTER")
     end
 
     f:SetBackdrop({
@@ -934,7 +981,9 @@ local function createDebugFrame()
         local p = VoidShieldHelperDB.pos
         f:SetPoint(p.point, UIParent, p.relPoint, p.x, p.y)
     else
-        f:SetPoint("CENTER", 0, 200)
+        -- Until it is dragged, sit just right of the forecast frame (and
+        -- follow it); dragging re-anchors to the screen and saves that.
+        f:SetPoint("LEFT", forecastFrame, "RIGHT", 12, 0)
     end
 
     f:SetBackdrop({
@@ -1231,8 +1280,8 @@ local function applySettings()
     if forecastFrame then
         applyBackdrop(forecastFrame,
             db.backdropBg,
-            db.bgColorR or 0, db.bgColorG or 0, db.bgColorB or 0, db.bgColorA or 0.82,
-            db.borderSize or 1,
+            db.bgColorR or 0, db.bgColorG or 0, db.bgColorB or 0, db.bgColorA or 0,
+            db.borderSize or 0,
             db.borderColorR or 0.32, db.borderColorG or 0.32, db.borderColorB or 0.32, db.borderColorA or 1)
     end
     if debugFrame then
@@ -1414,70 +1463,17 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if ... ~= ADDON_NAME then return end
         VoidShieldHelperDB = VoidShieldHelperDB or {}
         local db = VoidShieldHelperDB
-        -- Initialise defaults for new fields
-        if db.locked        == nil then db.locked        = false end
-        if db.hideDebug     == nil then db.hideDebug     = false end
-        db.forecastScale  = db.forecastScale  or 1.0
-        db.debugScale     = db.debugScale     or 1.0
-        db.backdropBg     = db.backdropBg     or ""
-        if db.bgColorR    == nil then db.bgColorR    = 0    end
-        if db.bgColorG    == nil then db.bgColorG    = 0    end
-        if db.bgColorB    == nil then db.bgColorB    = 0    end
-        if db.bgColorA    == nil then db.bgColorA    = 0.82 end
-        db.lightTexName   = db.lightTexName   or ""
-        if db.borderSize     == nil then db.borderSize     = 1    end
-        if db.borderColorR   == nil then db.borderColorR   = 0.32 end
-        if db.borderColorG   == nil then db.borderColorG   = 0.32 end
-        if db.borderColorB   == nil then db.borderColorB   = 0.32 end
-        if db.borderColorA   == nil then db.borderColorA   = 1    end
-        -- Debug frame appearance (independent from forecast frame)
-        if db.debugBgTex      == nil then db.debugBgTex      = "" end
-        if db.debugBgR        == nil then db.debugBgR        = 0    end
-        if db.debugBgG        == nil then db.debugBgG        = 0    end
-        if db.debugBgB        == nil then db.debugBgB        = 0    end
-        if db.debugBgA        == nil then db.debugBgA        = 0.82 end
-        if db.debugBorderSize == nil then db.debugBorderSize = 1    end
-        if db.debugBorderR    == nil then db.debugBorderR    = 0.32 end
-        if db.debugBorderG    == nil then db.debugBorderG    = 0.32 end
-        if db.debugBorderB    == nil then db.debugBorderB    = 0.32 end
-        if db.debugBorderA    == nil then db.debugBorderA    = 1    end
-        if db.smoothColors      == nil then db.smoothColors      = false end
-        if db.lightBorderSize   == nil then db.lightBorderSize   = 1    end
-        if db.lightBorderR      == nil then db.lightBorderR      = 0    end
-        if db.lightBorderG      == nil then db.lightBorderG      = 0    end
-        if db.lightBorderB      == nil then db.lightBorderB      = 0    end
-        if db.lightBorderA      == nil then db.lightBorderA      = 1    end
-        if db.lightSizeMain     == nil then db.lightSizeMain     = 24   end
-        if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
-        if db.lightGap          == nil then db.lightGap          = 14   end
-        if db.lightAlign        == nil then db.lightAlign        = "end" end
-        -- Status (charge) lights
-        if db.statusTexName     == nil then db.statusTexName     = ""   end
-        -- Drop keys from pre-release builds of this layout.
+        -- Drop keys from pre-release builds of the status-light layout.
         db.statusSize, db.statusWidth, db.statusHeight = nil, nil, nil
         if db.statusStack ~= "along" and db.statusStack ~= "across" then db.statusStack = nil end
-        if db.statusAlong       == nil then db.statusAlong       = 11   end
-        if db.statusAcross      == nil then db.statusAcross      = 24   end
-        if db.statusGap         == nil then db.statusGap         = 2    end
-        if db.statusStack       == nil then db.statusStack       = "across" end
-        if db.statusOnR         == nil then db.statusOnR         = 0    end
-        if db.statusOnG         == nil then db.statusOnG         = 0.9  end
-        if db.statusOnB         == nil then db.statusOnB         = 0.9  end
-        if db.statusOffR        == nil then db.statusOffR        = 0.3  end
-        if db.statusOffG        == nil then db.statusOffG        = 0.3  end
-        if db.statusOffB        == nil then db.statusOffB        = 0.3  end
-        if db.statusBorderSize  == nil then db.statusBorderSize  = 1    end
-        if db.statusBorderR     == nil then db.statusBorderR     = 0    end
-        if db.statusBorderG     == nil then db.statusBorderG     = 0    end
-        if db.statusBorderB     == nil then db.statusBorderB     = 0    end
-        if db.statusBorderA     == nil then db.statusBorderA     = 1    end
-        if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200   end
-        if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false  end
-        if db.hideOutOfCombat  == nil then db.hideOutOfCombat  = false  end
-        if db.verticalLayout   == nil then db.verticalLayout   = false  end
+        -- Fill in any missing settings (new install, or keys added since).
+        for k, v in pairs(DB_DEFAULTS) do
+            if db[k] == nil then db[k] = v end
+        end
 
-        debugFrame    = createDebugFrame()
+        -- Forecast first: the debug window's default position hangs off it.
         forecastFrame = createForecastFrame()
+        debugFrame    = createDebugFrame()
         applySettings()
         updateSpecState()
         updateDebugDisplay()

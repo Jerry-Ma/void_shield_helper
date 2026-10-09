@@ -777,7 +777,7 @@ local function buildOptionsFrame()
     table.insert(widgets, fBrdSw)
 
     local wFBrdSz = makeSlider(pFcast, "Border Size  (0=hidden)", 0, 4, 1, -80,
-        function() return db.borderSize or 1 end,
+        function() return db.borderSize or 0 end,
         function(v) db.borderSize = math.floor(v+0.5)
             if VSH.applySettings then VSH.applySettings() end end, "%d")
     table.insert(widgets, wFBrdSz)
@@ -815,7 +815,7 @@ local function buildOptionsFrame()
     table.insert(widgets, wAlign)
 
     local wLGap = makeSlider(pLayout, "Spacing along", 0, 40, 1, -106,
-        function() return db.lightGap or 14 end,
+        function() return db.lightGap or 9 end,
         function(v) db.lightGap = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wLGap)
 
@@ -877,7 +877,7 @@ local function buildOptionsFrame()
     sectionHeader(pStatus, "Size & Stacking  (all charges together)", -84)
 
     local wSAlong = makeSlider(pStatus, "Total size along", 4, 60, 1, -102,
-        function() return db.statusAlong or 11 end,
+        function() return db.statusAlong or 16 end,
         function(v) db.statusAlong = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wSAlong)
 
@@ -887,7 +887,7 @@ local function buildOptionsFrame()
     table.insert(widgets, wSAcross)
 
     local wSGap = makeSlider(pStatus, "Stack Spacing", 0, 20, 1, -206,
-        function() return db.statusGap or 2 end,
+        function() return db.statusGap or 1 end,
         function(v) db.statusGap = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wSGap)
 
