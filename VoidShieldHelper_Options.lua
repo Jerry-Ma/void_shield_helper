@@ -131,6 +131,55 @@ local function makeSlider(parent, label, min, max, step, yOff, getter, setter, f
     return c
 end
 
+-- Segmented choice: one button per option.  choices = { {value, label}, ... },
+-- getter()→value, setter(value)
+local function makeChoice(parent, label, yOff, choices, getter, setter)
+    local BTN_W, BTN_H = 70, 20
+    local c = CreateFrame("Frame", nil, parent)
+    c:SetSize(PANEL_W - 20, 44)
+    c:SetPoint("TOPLEFT", parent, "TOPLEFT", 10, yOff)
+
+    local lbl = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lbl:SetPoint("TOPLEFT", 0, 0)
+    lbl:SetText(label)
+    lbl:SetTextColor(S.text[1], S.text[2], S.text[3])
+
+    local btns = {}
+    local function refresh()
+        local cur = getter()
+        for _, b in ipairs(btns) do
+            if b.value == cur then
+                b:SetBackdropBorderColor(S.accent[1], S.accent[2], S.accent[3], 1)
+                b.txt:SetTextColor(S.accent[1], S.accent[2], S.accent[3])
+            else
+                b:SetBackdropBorderColor(S.border[1], S.border[2], S.border[3], 1)
+                b.txt:SetTextColor(S.text[1], S.text[2], S.text[3])
+            end
+        end
+    end
+
+    for i, choice in ipairs(choices) do
+        local b = CreateFrame("Button", nil, c, "BackdropTemplate")
+        b:SetSize(BTN_W, BTN_H)
+        b:SetPoint("TOPLEFT", (i - 1) * (BTN_W + 4), -18)
+        darkBackdrop(b)
+        b.value = choice[1]
+        b.txt = b:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        b.txt:SetPoint("CENTER")
+        b.txt:SetText(choice[2])
+        b:SetScript("OnClick", function()
+            setter(choice[1])
+            refresh()
+            PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON)
+        end)
+        btns[i] = b
+    end
+
+    refresh()
+    c.refresh = refresh
+    return c
+end
+
 -- Color swatch: opens ColorPickerFrame with alpha support.
 local function makeColorSwatch(parent, label, xOff, yOff, kr, kg, kb, ka)
     local sw = CreateFrame("Button", nil, parent, "BackdropTemplate")
@@ -437,7 +486,7 @@ end
 
 -- ─── Options panel ───────────────────────────────────────────────────────────
 -- Tabbed layout: sidebar on the left, content area on the right.
--- Tabs: General | Forecast | Lights | Debug
+-- Tabs: General | Frame | Layout | Prediction | Status | Debug
 
 local optionsFrame = nil
 
@@ -594,42 +643,36 @@ local function buildOptionsFrame()
             if VSH.updateFrameVisibility then VSH.updateFrameVisibility() end end)
     table.insert(widgets, wHideOOC)
 
-    local wVertical = makeCheckbox(pGen, "Vertical layout", -106,
-        function() return db.verticalLayout or false end,
-        function(v) db.verticalLayout = v
-            if VSH.rebuildLights then VSH.rebuildLights() end end)
-    table.insert(widgets, wVertical)
+    sectionHeader(pGen, "Scale", -112)
 
-    sectionHeader(pGen, "Scale", -138)
-
-    local wFS = makeSlider(pGen, "Indicator Frame Scale", 0.5, 2.0, 0.05, -156,
+    local wFS = makeSlider(pGen, "Indicator Frame Scale", 0.5, 2.0, 0.05, -130,
         function() return db.forecastScale or 1.0 end,
         function(v) db.forecastScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFS)
 
-    local wDS = makeSlider(pGen, "Debug Window Scale", 0.5, 2.0, 0.05, -208,
+    local wDS = makeSlider(pGen, "Debug Window Scale", 0.5, 2.0, 0.05, -182,
         function() return db.debugScale or 1.0 end,
         function(v) db.debugScale = v; if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wDS)
 
-    sectionHeader(pGen, "Detection", -264)
+    sectionHeader(pGen, "Detection", -238)
 
-    local wProcDelay = makeSlider(pGen, "Proc check delay (ms)", 50, 500, 10, -282,
+    local wProcDelay = makeSlider(pGen, "Proc check delay (ms)", 50, 500, 10, -256,
         function() return db.procCheckDelayMs or 200 end,
         function(v) db.procCheckDelayMs = math.floor(v + 0.5) end,
         "%d ms")
     table.insert(widgets, wProcDelay)
 
-    local wPrune = makeCheckbox(pGen, "Prune offsets on zone entry", -310,
+    local wPrune = makeCheckbox(pGen, "Prune offsets on zone entry", -284,
         function() return db.pruneOffsetOnZone or false end,
         function(v) db.pruneOffsetOnZone = v end)
     table.insert(widgets, wPrune)
 
-    sectionHeader(pGen, "Colours", -338)
+    sectionHeader(pGen, "Prediction Colours", -312)
 
     local refreshBar  -- forward ref; assigned below once segments are built
 
-    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -356,
+    local wSmooth = makeCheckbox(pGen, "Smooth gradient colours", -330,
         function() return db.smoothColors or false end,
         function(v) db.smoothColors = v
             if VSH.updateForecastDisplay then VSH.updateForecastDisplay() end
@@ -637,7 +680,7 @@ local function buildOptionsFrame()
     table.insert(widgets, wSmooth)
 
     -- Special case swatches (outside the gradient range)
-    local specY = -380
+    local specY = -354
     for _, row in ipairs({
         { r=0.4, g=0.4, b=0.4, label="n/a  - no data yet"       },
         { r=0.9, g=0.2, b=0.2, label="  0% - guaranteed no-proc" },
@@ -747,53 +790,130 @@ local function buildOptionsFrame()
             if VSH.applySettings then VSH.applySettings() end end)
     table.insert(widgets, wFBgTex)
 
-    -- ── Tab 3: Lights ─────────────────────────────────────────────────────────
-    local pLights = addTab("Indicators")
+    local function rebuild()
+        if VSH.rebuildLights then VSH.rebuildLights() end
+    end
+    local function apply()
+        if VSH.applySettings then VSH.applySettings() end
+    end
+
+    -- ── Tab 3: Layout ─────────────────────────────────────────────────────────
+    -- Four logical slots: [status] [N+1] [N+2] [N+3]
+    local pLayout = addTab("Layout")
+
+    sectionHeader(pLayout, "Slots", -10)
+
+    local wVertical = makeCheckbox(pLayout, "Vertical layout", -28,
+        function() return db.verticalLayout or false end,
+        function(v) db.verticalLayout = v; rebuild() end)
+    table.insert(widgets, wVertical)
+
+    local wAlign = makeChoice(pLayout, "Slot alignment  (start = top / left)", -54,
+        { { "start", "Start" }, { "center", "Center" }, { "end", "End" } },
+        function() return db.lightAlign or "end" end,
+        function(v) db.lightAlign = v; rebuild() end)
+    table.insert(widgets, wAlign)
+
+    local wLGap = makeSlider(pLayout, "Slot Spacing", 0, 40, 1, -106,
+        function() return db.lightGap or 14 end,
+        function(v) db.lightGap = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wLGap)
+
+    -- ── Tab 4: Prediction lights (N+1, N+2, N+3) ─────────────────────────────
+    local pLights = addTab("Prediction")
 
     sectionHeader(pLights, "Texture", -10)
 
     local wFLtTex = makeTextureDropdown(pLights, "Light Texture (squares)", "statusbar", -28,
         function() return db.lightTexName or "" end,
-        function(name) db.lightTexName = name
-            if VSH.applySettings then VSH.applySettings() end end)
+        function(name) db.lightTexName = name; apply() end)
     table.insert(widgets, wFLtTex)
 
-    sectionHeader(pLights, "Size & Spacing", -84)
+    sectionHeader(pLights, "Size", -84)
 
-    local wLSzMain = makeSlider(pLights, "Main Light Size", 8, 48, 1, -102,
+    local wLSzMain = makeSlider(pLights, "N+1 Light Size", 8, 48, 1, -102,
         function() return db.lightSizeMain or 24 end,
-        function(v) db.lightSizeMain = math.floor(v+0.5)
-            if VSH.rebuildLights then VSH.rebuildLights() end end, "%d")
+        function(v) db.lightSizeMain = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wLSzMain)
 
-    local wLSzSmall = makeSlider(pLights, "Secondary Light Size", 6, 40, 1, -154,
+    local wLSzSmall = makeSlider(pLights, "N+2 / N+3 Light Size", 6, 40, 1, -154,
         function() return db.lightSizeSmall or 16 end,
-        function(v) db.lightSizeSmall = math.floor(v+0.5)
-            if VSH.rebuildLights then VSH.rebuildLights() end end, "%d")
+        function(v) db.lightSizeSmall = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wLSzSmall)
 
-    local wLGap = makeSlider(pLights, "Light Spacing", 2, 40, 1, -206,
-        function() return db.lightGap or 14 end,
-        function(v) db.lightGap = math.floor(v+0.5)
-            if VSH.rebuildLights then VSH.rebuildLights() end end, "%d")
-    table.insert(widgets, wLGap)
-
-    sectionHeader(pLights, "Border", -260)
+    sectionHeader(pLights, "Border", -210)
 
     local lBrdLbl = pLights:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    lBrdLbl:SetPoint("TOPLEFT", pLights, "TOPLEFT", 10, -278)
+    lBrdLbl:SetPoint("TOPLEFT", pLights, "TOPLEFT", 10, -228)
     lBrdLbl:SetText("Border Color"); lBrdLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    local wLBrdSw = makeColorSwatch(pLights, "", 10, -296, "lightBorderR", "lightBorderG", "lightBorderB", "lightBorderA")
+    local wLBrdSw = makeColorSwatch(pLights, "", 10, -246, "lightBorderR", "lightBorderG", "lightBorderB", "lightBorderA")
     table.insert(widgets, wLBrdSw)
 
-    local wLBrdSz = makeSlider(pLights, "Border Size  (0=hidden)", 0, 4, 1, -330,
+    local wLBrdSz = makeSlider(pLights, "Border Size  (0=hidden)", 0, 4, 1, -280,
         function() return db.lightBorderSize or 1 end,
-        function(v) db.lightBorderSize = math.floor(v+0.5)
-            if VSH.applySettings then VSH.applySettings() end end, "%d")
+        function(v) db.lightBorderSize = math.floor(v+0.5); apply() end, "%d")
     table.insert(widgets, wLBrdSz)
 
-    -- ── Tab 4: Debug Frame ────────────────────────────────────────────────────
+    -- ── Tab 5: Status lights (Void Shield charges) ───────────────────────────
+    -- Stacked across the layout axis: a column in the horizontal layout, a
+    -- row in the vertical one.
+    local pStatus = addTab("Status")
+
+    sectionHeader(pStatus, "Texture", -10)
+
+    local wSTex = makeTextureDropdown(pStatus, "Light Texture (squares)", "statusbar", -28,
+        function() return db.statusTexName or "" end,
+        function(name) db.statusTexName = name; apply() end)
+    table.insert(widgets, wSTex)
+
+    sectionHeader(pStatus, "Size & Spacing", -84)
+
+    local wSSz = makeSlider(pStatus, "Charge Light Size", 4, 40, 1, -102,
+        function() return db.statusSize or 11 end,
+        function(v) db.statusSize = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wSSz)
+
+    local wSGap = makeSlider(pStatus, "Stack Spacing", 0, 20, 1, -154,
+        function() return db.statusGap or 2 end,
+        function(v) db.statusGap = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wSGap)
+
+    sectionHeader(pStatus, "Colours", -210)
+
+    local sOnLbl = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    sOnLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -228)
+    sOnLbl:SetText("Charge Held"); sOnLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
+
+    local sOffLbl = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    sOffLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 155, -228)
+    sOffLbl:SetText("Empty"); sOffLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
+
+    table.insert(widgets, makeColorSwatch(pStatus, "", 10, -246, "statusOnR", "statusOnG", "statusOnB"))
+    table.insert(widgets, makeColorSwatch(pStatus, "", 155, -246, "statusOffR", "statusOffG", "statusOffB"))
+
+    sectionHeader(pStatus, "Border", -282)
+
+    local sBrdLbl = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    sBrdLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -300)
+    sBrdLbl:SetText("Border Color"); sBrdLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
+
+    local wSBrdSw = makeColorSwatch(pStatus, "", 10, -318, "statusBorderR", "statusBorderG", "statusBorderB", "statusBorderA")
+    table.insert(widgets, wSBrdSw)
+
+    local wSBrdSz = makeSlider(pStatus, "Border Size  (0=hidden)", 0, 4, 1, -352,
+        function() return db.statusBorderSize or 1 end,
+        function(v) db.statusBorderSize = math.floor(v+0.5); apply() end, "%d")
+    table.insert(widgets, wSBrdSz)
+
+    local sHint = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    sHint:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -404)
+    sHint:SetWidth(PANEL_W - 20)
+    sHint:SetJustifyH("LEFT")
+    sHint:SetText("At 2 charges, when the next Penance could proc, the charge lights play the action-bar proc glow: spend a charge first.")
+    sHint:SetTextColor(S.dim[1], S.dim[2], S.dim[3])
+
+    -- ── Tab 6: Debug Frame ────────────────────────────────────────────────────
     local pDebug = addTab("Debug")
 
     sectionHeader(pDebug, "Background & Border", -10)

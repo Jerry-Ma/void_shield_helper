@@ -20,14 +20,16 @@ As of 12.1 (the addon requires 12.1 or later):
 
 ### Forecast lights
 
-One light per card of the deck:
+The frame has four slots, one per card of the deck: **[status] [N+1] [N+2] [N+3]**.
 
-| Light | Meaning |
-|-------|---------|
-| **Charges** | Split in two: bottom half lit = 1 charge, both lit = 2. Plays the action-bar **proc glow** when you're at 2 charges and the next Penance could proc — spend a charge first or that proc is wasted. |
+| Slot | Meaning |
+|------|---------|
+| **Status** | One light per Void Shield charge, stacked across the layout (a column when horizontal, a row when vertical); lit = charge held. They play the action-bar **proc glow** when you're at 2 charges and the next Penance could proc — spend a charge first or that proc is wasted. |
 | **N+1** (large) | Probability your *next* Penance will proc |
 | **N+2** | Probability the Penance after that will proc |
 | **N+3** | Probability the Penance after *that* will proc |
+
+Layout options: horizontal or vertical, slot spacing, and slot alignment across the layout (start = top/left, center, end = bottom/right). Prediction and status lights each have their own texture, size, border and (for status) colours and stack spacing.
 
 Colour scale: **cyan** (100% — will proc) → **green** (≥ 66%) → **yellow** (≥ 33%) → **orange** (< 33%) → **red** (0% — won't proc) → **grey** (not enough data)
 

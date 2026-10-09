@@ -10,10 +10,11 @@
 - The display refreshes immediately when the last charge is spent (`ACTIONBAR_SLOT_CHANGED`) instead of waiting for the next tick.
 
 ### Forecast frame
-- Four lights, one per card: **Charges · N+1 · N+2 · N+3**. The LAST-result light is replaced by the charges light.
-- The charges light is split in two halves (bottom = 1st charge, top = 2nd).
-- At 2 charges with a possible proc on the next Penance, the charges light plays Blizzard's action-bar proc glow as a reminder to spend a charge before the proc is wasted.
-- Debug window shows the charge count and N+3; the event log records charges per cast.
+- Four slots, one per card: **status · N+1 · N+2 · N+3**. The LAST-result light is replaced by the status slot.
+- The status slot holds one light per charge, stacked opposite to the layout (a column in the horizontal layout, a row in the vertical one).
+- At 2 charges with a possible proc on the next Penance, the status lights play Blizzard's action-bar proc glow as a reminder to spend a charge before the proc is wasted.
+- New options: slot alignment (start / center / end), separate slot spacing and status stack spacing, and separate texture, size, colours and border for status lights. Options are reorganised into Layout, Prediction and Status tabs.
+- Debug window shows the charge count, N+3, and whether the Cooldown Manager is tracking the Void Shield buff; the event log records charges per cast.
 
 Mechanics adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) v2.3.0.
 

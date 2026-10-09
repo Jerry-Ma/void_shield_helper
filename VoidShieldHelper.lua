@@ -271,6 +271,7 @@ local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visibl
 local chargeCount              = 0      -- active proc charges (0..MAX_CHARGES)
 local blizzardCount            = false  -- true when chargeCount came from the Cooldown Manager
 local cooldownIDCache          = nil    -- cached Cooldown Manager cooldownID for our proc
+local cdmTracked               = false  -- Cooldown Manager has an item for our proc buff
 
 -- Penance cast results (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first.
 local penanceHistory           = {}
@@ -441,9 +442,10 @@ local function fontStringHasText(fs)
     return nil
 end
 
---- Exact charge count piggybacked off Blizzard's Cooldown Manager, or nil when
---- it can't be determined (item not tracked, or every probe hit a secret).
-local function readBlizzardStacksUnsafe()
+--- The Cooldown Manager item frame tracking our proc buff, or nil.  The viewers
+--- keep an item for every tracked buff whether or not the aura is up, so this
+--- also answers "is the buff tracked at all".
+local function findCooldownItemUnsafe()
     if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo) then
         return nil
     end
@@ -456,12 +458,7 @@ local function readBlizzardStacksUnsafe()
                 if cdID and (cdID == cooldownIDCache
                         or cooldownInfoMatches(C_CooldownViewer.GetCooldownViewerCooldownInfo(cdID))) then
                     cooldownIDCache = cdID
-                    local appsFS = itemApplicationsFontString(itemFrame)
-                    local hasText = appsFS and fontStringHasText(appsFS)
-                    if appsFS == nil or hasText == nil then
-                        return nil
-                    end
-                    return hasText and MAX_CHARGES or 1
+                    return itemFrame
                 end
             end
         end
@@ -469,10 +466,22 @@ local function readBlizzardStacksUnsafe()
     return nil
 end
 
-local function readBlizzardStacks()
-    local ok, n = pcall(readBlizzardStacksUnsafe)
-    if ok then return n end
+local function findCooldownItem()
+    local ok, item = pcall(findCooldownItemUnsafe)
+    if ok then return item end
     return nil
+end
+
+--- Exact charge count piggybacked off Blizzard's Cooldown Manager, or nil when
+--- it can't be determined (item not tracked, or every probe hit a secret).
+local function readBlizzardStacks()
+    local item = findCooldownItem()
+    cdmTracked = item ~= nil
+    if not item then return nil end
+    local appsFS = itemApplicationsFontString(item)
+    local hasText = appsFS and fontStringHasText(appsFS)
+    if appsFS == nil or hasText == nil then return nil end
+    return hasText and MAX_CHARGES or 1
 end
 
 --- Update shieldActive / chargeCount from the PW:S action-button texture (the
@@ -627,19 +636,27 @@ local function onSpellSucceeded(spellID)
 end
 
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
--- Four lights, one per card of the 4-cast deck:
---   [charges] [N+1 probability] [N+2 probability] [N+3 probability]
--- N+1 is the primary indicator (full size); the others are smaller.
--- The charges light is split into a bottom half (1st charge) and a top half
--- (2nd charge).  At the charge cap with a possible proc on the next cast it
--- plays the standard action-button proc glow: spend a charge first, or the
--- proc is wasted.
--- Lights are bottom-aligned.
--- Default sizes/gap; overridden by DB at runtime.
+-- The frame is a row (horizontal layout) or column (vertical layout) of four
+-- logical slots, one per card of the 4-cast deck:
+--   [status] [N+1] [N+2] [N+3]
+-- Slot 1 holds the STATUS lights, one per Void Shield charge, stacked across
+-- the layout axis: a column in the horizontal layout (1st charge at the
+-- bottom), a row in the vertical one (1st charge on the left).  At the charge
+-- cap with a possible proc on the next cast they play the action-bar proc
+-- glow: spend a charge first, or that proc is wasted.
+-- Slots 2-4 hold the PREDICTION lights; N+1 is the primary (full size).
+-- Every slot is aligned across the layout axis by db.lightAlign:
+--   "start" = top / left, "center", "end" = bottom / right.
+-- Default sizes/gaps; overridden by DB at runtime.
 local LIGHT_SIZE_MAIN_DEFAULT  = 24
 local LIGHT_SIZE_SMALL_DEFAULT = 16
-local LIGHT_GAP_DEFAULT        = 14
-local NUM_LIGHTS               = 4
+local LIGHT_GAP_DEFAULT        = 14   -- between logical slots
+local STATUS_SIZE_DEFAULT      = 11
+local STATUS_GAP_DEFAULT       = 2    -- between stacked status lights
+local LIGHT_ALIGN_DEFAULT      = "end"
+local NUM_SLOTS                = 4
+local FRAME_PADDING            = 8
+local WHITE_TEX                = "Interface\\Buttons\\WHITE8x8"
 
 -- Blizzard's own proc-loop marching ants (the art the action bars use when a
 -- spell procs).  Played by a C-side FlipBook AnimationGroup, so it costs no
@@ -647,29 +664,30 @@ local NUM_LIGHTS               = 4
 local PROC_GLOW_ATLAS   = "UI-HUD-ActionBar-Proc-Loop-Flipbook"
 local PROC_GLOW_PADDING = 1.4
 
-local CHARGE_ON_R,  CHARGE_ON_G,  CHARGE_ON_B  = 0.0, 0.9, 0.9   -- cyan, same as a proc
-local CHARGE_OFF_R, CHARGE_OFF_G, CHARGE_OFF_B = 0.3, 0.3, 0.3   -- grey, same as no data
-
---- Add the two charge halves and the proc glow to the charges light.
-local function buildChargeLight(light, size, texPath, inset)
-    -- The backdrop shows through the 1px gap between the halves.
-    light:SetBackdropColor(0, 0, 0, 1)
-    light.charges = {}
-    local halfH = (size - inset * 2 - 1) / 2
-    for i = 1, MAX_CHARGES do
-        local t = light:CreateTexture(nil, "ARTWORK")
-        t:SetTexture(texPath)
-        t:SetPoint("LEFT", light, "LEFT", inset, 0)
-        t:SetPoint("RIGHT", light, "RIGHT", -inset, 0)
-        t:SetHeight(halfH)
-        if i == 1 then
-            t:SetPoint("BOTTOM", light, "BOTTOM", 0, inset)
-        else
-            t:SetPoint("TOP", light, "TOP", 0, -inset)
-        end
-        light.charges[i] = t
+local function fetchStatusbar(name)
+    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+    if LSM and name and name ~= "" then
+        return LSM:Fetch("statusbar", name, true)
     end
+    return nil
+end
 
+--- A square light: backdrop fill (tinted per update) plus a pixel border.
+local function makeLight(parent, size, texPath, borderSize, br, bg, bb, ba)
+    local light = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    light:SetSize(size, size)
+    light:SetBackdrop({
+        bgFile   = texPath or WHITE_TEX,
+        edgeFile = WHITE_TEX,
+        edgeSize = math.max(1, borderSize),
+        tile = true, tileSize = 16,
+    })
+    light:SetBackdropColor(0.3, 0.3, 0.3, 1)
+    light:SetBackdropBorderColor(br, bg, bb, (borderSize > 0) and ba or 0)
+    return light
+end
+
+local function addProcGlow(light, size)
     local glow = light:CreateTexture(nil, "OVERLAY")
     glow:SetAtlas(PROC_GLOW_ATLAS)
     glow:SetSize(size * PROC_GLOW_PADDING, size * PROC_GLOW_PADDING)
@@ -688,80 +706,87 @@ end
 -- Rebuild (or initially build) the light frames inside forecastFrame.
 -- Tears down existing lights first so it can be called on settings change.
 local function rebuildLights(f)
-    local db    = VoidShieldHelperDB or {}
-    local szMain  = db.lightSizeMain  or LIGHT_SIZE_MAIN_DEFAULT
-    local szSmall = db.lightSizeSmall or LIGHT_SIZE_SMALL_DEFAULT
-    local gap     = db.lightGap       or LIGHT_GAP_DEFAULT
+    local db       = VoidShieldHelperDB or {}
+    local szMain   = db.lightSizeMain  or LIGHT_SIZE_MAIN_DEFAULT
+    local szSmall  = db.lightSizeSmall or LIGHT_SIZE_SMALL_DEFAULT
+    local gap      = db.lightGap       or LIGHT_GAP_DEFAULT
+    local szStat   = db.statusSize     or STATUS_SIZE_DEFAULT
+    local statGap  = db.statusGap      or STATUS_GAP_DEFAULT
+    local align    = db.lightAlign     or LIGHT_ALIGN_DEFAULT
+    local vertical = db.verticalLayout
 
-    -- Tear down existing lights
-    if f.lights then
-        for _, light in ipairs(f.lights) do
-            light:Hide()
-            light:SetParent(nil)
+    -- Tear down the previous slots (their lights go with them).
+    if f.slots then
+        for _, slot in ipairs(f.slots) do
+            slot:Hide()
+            slot:SetParent(nil)
         end
     end
-    f.lights = {}
+    f.slots, f.lights, f.statusLights = {}, {}, {}
 
-    local padding = 8
-    local sizes, xOffsets, topOffsets
-
-    -- charges (small) → N+1 (main) → N+2 (small) → N+3 (small)
-    sizes = { szSmall, szMain, szSmall, szSmall }
-    local span = 0
-    for i = 1, NUM_LIGHTS do span = span + sizes[i] end
-    span = span + gap * (NUM_LIGHTS - 1)
-    xOffsets, topOffsets = {}, {}
-
-    if db.verticalLayout then
-        -- Vertical: top to bottom, centered horizontally.
-        f:SetSize(szMain + padding * 2, span + padding * 2)
-        local y = -padding
-        for i = 1, NUM_LIGHTS do
-            xOffsets[i]   = padding + (szMain - sizes[i]) / 2
-            topOffsets[i] = y
-            y = y - sizes[i] - gap
-        end
+    -- Each slot's extent ALONG the layout axis and ACROSS it.  The status slot
+    -- is one light along, and the stack of status lights across.
+    local statusAcross = szStat * MAX_CHARGES + statGap * (MAX_CHARGES - 1)
+    local along  = { szStat,       szMain, szSmall, szSmall }
+    local across = { statusAcross, szMain, szSmall, szSmall }
+    local span, crossMax = gap * (NUM_SLOTS - 1), 0
+    for i = 1, NUM_SLOTS do
+        span     = span + along[i]
+        crossMax = math.max(crossMax, across[i])
+    end
+    if vertical then
+        f:SetSize(crossMax + FRAME_PADDING * 2, span + FRAME_PADDING * 2)
     else
-        -- Horizontal: left to right, bottom-aligned.
-        f:SetSize(span + padding * 2, szMain + padding * 2)
-        local bottomY = -(padding + szMain)
-        local x = padding
-        for i = 1, NUM_LIGHTS do
-            xOffsets[i]   = x
-            topOffsets[i] = bottomY + sizes[i]
-            x = x + sizes[i] + gap
+        f:SetSize(span + FRAME_PADDING * 2, crossMax + FRAME_PADDING * 2)
+    end
+
+    -- Lay the slots out along the axis; offset each across it by alignment
+    -- (measured from the top in the horizontal layout, from the left in the
+    -- vertical one, so "start" is top / left in both).
+    local pos = FRAME_PADDING
+    for i = 1, NUM_SLOTS do
+        local free  = crossMax - across[i]
+        local cross = FRAME_PADDING + ((align == "start" and 0)
+                                    or (align == "center" and free / 2)
+                                    or free)
+        local slot = CreateFrame("Frame", nil, f)
+        if vertical then
+            slot:SetSize(across[i], along[i])
+            slot:SetPoint("TOPLEFT", f, "TOPLEFT", cross, -pos)
+        else
+            slot:SetSize(along[i], across[i])
+            slot:SetPoint("TOPLEFT", f, "TOPLEFT", pos, -cross)
         end
+        pos = pos + along[i] + gap
+        f.slots[i] = slot
     end
 
-    -- Resolve light texture
-    local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
-    local lightTexPath = nil
-    if LSM and db.lightTexName and db.lightTexName ~= "" then
-        lightTexPath = LSM:Fetch("statusbar", db.lightTexName)
-    end
-
+    -- Prediction lights (N+1, N+2, N+3) fill slots 2-4.
     local lbs = db.lightBorderSize or 1
-    local lba = (lbs > 0) and (db.lightBorderA or 1) or 0
-    local lbr = db.lightBorderR or 0
-    local lbg = db.lightBorderG or 0
-    local lbb = db.lightBorderB or 0
-
-    for i = 1, NUM_LIGHTS do
-        local light = CreateFrame("Frame", nil, f, "BackdropTemplate")
-        light:SetSize(sizes[i], sizes[i])
-        light:SetPoint("TOPLEFT", f, "TOPLEFT", xOffsets[i], topOffsets[i])
-        light:SetBackdrop({
-            bgFile   = lightTexPath or "Interface\\Buttons\\WHITE8x8",
-            edgeFile = "Interface\\Buttons\\WHITE8x8",
-            edgeSize = math.max(1, lbs),
-            tile = true, tileSize = 16,
-        })
-        light:SetBackdropColor(0.3, 0.3, 0.3, 1)
-        light:SetBackdropBorderColor(lbr, lbg, lbb, lba)
-        f.lights[i] = light
+    local predTex = fetchStatusbar(db.lightTexName)
+    for i = 2, NUM_SLOTS do
+        local light = makeLight(f.slots[i], along[i], predTex, lbs,
+            db.lightBorderR or 0, db.lightBorderG or 0, db.lightBorderB or 0, db.lightBorderA or 1)
+        light:SetPoint("TOPLEFT")
+        f.lights[i - 1] = light
     end
-    buildChargeLight(f.lights[1], sizes[1],
-        lightTexPath or "Interface\\Buttons\\WHITE8x8", math.max(0, lbs))
+
+    -- Status lights stack inside slot 1: upward from the bottom in the
+    -- horizontal layout, rightward from the left in the vertical one.
+    local sbs = db.statusBorderSize or 1
+    local statTex = fetchStatusbar(db.statusTexName)
+    for i = 1, MAX_CHARGES do
+        local light = makeLight(f.slots[1], szStat, statTex, sbs,
+            db.statusBorderR or 0, db.statusBorderG or 0, db.statusBorderB or 0, db.statusBorderA or 1)
+        local step = (i - 1) * (szStat + statGap)
+        if vertical then
+            light:SetPoint("TOPLEFT", f.slots[1], "TOPLEFT", step, 0)
+        else
+            light:SetPoint("BOTTOMLEFT", f.slots[1], "BOTTOMLEFT", 0, step)
+        end
+        addProcGlow(light, szStat)
+        f.statusLights[i] = light
+    end
 end
 
 local function createForecastFrame()
@@ -855,31 +880,29 @@ updateForecastDisplay = function()
     local lights = forecastFrame.lights
     local prob1  = DeckPredictor_getProb(predictor)
 
-    -- Light 1: one half per charge held (bottom = 1st, top = 2nd).
-    local chargeLight = lights[1]
-    for i, half in ipairs(chargeLight.charges) do
+    -- Status lights: one per charge held.  At the cap a proc on the next
+    -- Penance would be wasted, so they glow until a charge is spent.
+    local db = VoidShieldHelperDB or {}
+    local capped = chargeCount >= MAX_CHARGES and prob1 ~= nil and prob1 > 0
+    for i, light in ipairs(forecastFrame.statusLights) do
         if i <= chargeCount then
-            half:SetVertexColor(CHARGE_ON_R, CHARGE_ON_G, CHARGE_ON_B, 1)
+            applyLight(light, db.statusOnR or 0, db.statusOnG or 0.9, db.statusOnB or 0.9)
         else
-            half:SetVertexColor(CHARGE_OFF_R, CHARGE_OFF_G, CHARGE_OFF_B, 1)
+            applyLight(light, db.statusOffR or 0.3, db.statusOffG or 0.3, db.statusOffB or 0.3)
+        end
+        if capped and not light.glowAnim:IsPlaying() then
+            light.glow:Show()
+            light.glowAnim:Play()
+        elseif not capped and light.glowAnim:IsPlaying() then
+            light.glowAnim:Stop()
+            light.glow:Hide()
         end
     end
 
-    -- At the cap, a proc on the next Penance would be wasted: glow until a
-    -- charge is spent.
-    local capped = chargeCount >= MAX_CHARGES and prob1 ~= nil and prob1 > 0
-    if capped and not chargeLight.glowAnim:IsPlaying() then
-        chargeLight.glow:Show()
-        chargeLight.glowAnim:Play()
-    elseif not capped and chargeLight.glowAnim:IsPlaying() then
-        chargeLight.glowAnim:Stop()
-        chargeLight.glow:Hide()
-    end
-
-    -- Lights 2-4 (N+1, N+2, N+3): probability color (cyan at 100%)
-    applyLight(lights[2], probColor(prob1))
-    applyLight(lights[3], probColor(DeckPredictor_getProbAhead(predictor, 2)))
-    applyLight(lights[4], probColor(DeckPredictor_getProbAhead(predictor, 3)))
+    -- Prediction lights (N+1, N+2, N+3): probability color (cyan at 100%)
+    applyLight(lights[1], probColor(prob1))
+    applyLight(lights[2], probColor(DeckPredictor_getProbAhead(predictor, 2)))
+    applyLight(lights[3], probColor(DeckPredictor_getProbAhead(predictor, 3)))
 end
 -- ─── Debug UI ────────────────────────────────────────────────────────────────
 
@@ -891,7 +914,7 @@ local RESULT_COLOR = {
 
 local function createDebugFrame()
     local f = CreateFrame("Frame", "VoidShieldHelperDebugFrame", UIParent, "BackdropTemplate")
-    f:SetSize(240, 312)
+    f:SetSize(240, 328)
 
     if VoidShieldHelperDB.pos then
         local p = VoidShieldHelperDB.pos
@@ -941,9 +964,17 @@ local function createDebugFrame()
     slotLabel:SetText("")
     f.slotLabel = slotLabel
 
+    -- Cooldown Manager tracking of the Void Shield buff (exact charge count)
+    local cdmLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    cdmLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -62)
+    cdmLabel:SetWidth(220)
+    cdmLabel:SetJustifyH("LEFT")
+    cdmLabel:SetText("")
+    f.cdmLabel = cdmLabel
+
     -- Deck prediction probability
     local probLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    probLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -62)
+    probLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -78)
     probLabel:SetWidth(220)
     probLabel:SetJustifyH("LEFT")
     probLabel:SetText("Next proc: —")
@@ -951,7 +982,7 @@ local function createDebugFrame()
 
     -- Phase / break info (second line under prob)
     local phaseLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    phaseLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -78)
+    phaseLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -94)
     phaseLabel:SetWidth(220)
     phaseLabel:SetJustifyH("LEFT")
     phaseLabel:SetText("")
@@ -959,7 +990,7 @@ local function createDebugFrame()
 
     -- History verification (shown when phase converged)
     local verifyLabel = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    verifyLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -94)
+    verifyLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -110)
     verifyLabel:SetWidth(220)
     verifyLabel:SetJustifyH("LEFT")
     verifyLabel:SetText("")
@@ -967,14 +998,14 @@ local function createDebugFrame()
 
     -- History section header
     local histHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    histHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -110)
+    histHeader:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -126)
     histHeader:SetText("Penance history (newest first):")
 
     -- History entry lines
     f.histLines = {}
     for i = 1, MAX_DISPLAY_HISTORY do
         local line = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -110 - (i * 18))
+        line:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -126 - (i * 18))
         line:SetWidth(212)
         line:SetJustifyH("LEFT")
         line:SetText(string.format("#%d: —", i))
@@ -1015,6 +1046,13 @@ updateDebugDisplay = function()
             debugFrame.slotLabel:SetText(
                 "|cffff4444PW:S not on action bar!|r")
         end
+    end
+
+    -- Cooldown Manager buff info / warning
+    if cdmTracked then
+        debugFrame.cdmLabel:SetText("|cff00ff00Void Shield in Cooldown Manager|r")
+    else
+        debugFrame.cdmLabel:SetText("|cffff8800Void Shield not in CDM: count inferred|r")
     end
 
     -- Prediction probability
@@ -1269,6 +1307,11 @@ local function tickUpdate()
     if iterationsUntilSlotRefresh <= 0 then
         refreshWatchSlot()
         iterationsUntilSlotRefresh = 10  -- ~every 1 s at 0.1 s tick
+        -- The Cooldown Manager can be configured at any time; re-check whether
+        -- it tracks our buff (pollShieldState only looks while a charge is up).
+        local wasTracked = cdmTracked
+        cdmTracked = findCooldownItem() ~= nil
+        if cdmTracked ~= wasTracked then updateDebugDisplay() end
     end
 
     local prevShieldActive, prevCharges = shieldActive, chargeCount
@@ -1380,6 +1423,22 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightSizeMain     == nil then db.lightSizeMain     = 24   end
         if db.lightSizeSmall    == nil then db.lightSizeSmall    = 16   end
         if db.lightGap          == nil then db.lightGap          = 14   end
+        if db.lightAlign        == nil then db.lightAlign        = "end" end
+        -- Status (charge) lights
+        if db.statusTexName     == nil then db.statusTexName     = ""   end
+        if db.statusSize        == nil then db.statusSize        = 11   end
+        if db.statusGap         == nil then db.statusGap         = 2    end
+        if db.statusOnR         == nil then db.statusOnR         = 0    end
+        if db.statusOnG         == nil then db.statusOnG         = 0.9  end
+        if db.statusOnB         == nil then db.statusOnB         = 0.9  end
+        if db.statusOffR        == nil then db.statusOffR        = 0.3  end
+        if db.statusOffG        == nil then db.statusOffG        = 0.3  end
+        if db.statusOffB        == nil then db.statusOffB        = 0.3  end
+        if db.statusBorderSize  == nil then db.statusBorderSize  = 1    end
+        if db.statusBorderR     == nil then db.statusBorderR     = 0    end
+        if db.statusBorderG     == nil then db.statusBorderG     = 0    end
+        if db.statusBorderB     == nil then db.statusBorderB     = 0    end
+        if db.statusBorderA     == nil then db.statusBorderA     = 1    end
         if db.procCheckDelayMs  == nil then db.procCheckDelayMs  = 200   end
         if db.pruneOffsetOnZone == nil then db.pruneOffsetOnZone = false  end
         if db.hideOutOfCombat  == nil then db.hideOutOfCombat  = false  end
