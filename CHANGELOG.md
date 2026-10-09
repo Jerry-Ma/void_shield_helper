@@ -3,14 +3,19 @@
 ## [1.2.0] - 2026-10-09
 
 ### 12.1 support
-- Supports both 12.0.7 and 12.1 clients (`## Interface: 120007, 120100`); the mechanic is picked from the running client's build.
-- 12.1: Penance deck is 4 casts (25% per cast, was 3 / 33%). The phase predictor, history block colouring and consistency check now use the client's deck size instead of a hardcoded 3.
-- 12.1: Void Shield holds up to 2 charges. The exact count is read from Blizzard's Cooldown Manager when it shows the buff (never reading the secret stack value — only whether its text is secret), so a Penance proc landing on an existing charge is detected. Otherwise the count is inferred from Mind Blast (+1) and Void Shield casts (−1).
+- Requires 12.1 (`## Interface: 120100, 120105`); 12.0.7 is no longer supported.
+- Penance deck is 4 casts (25% for the first card, was 3 / 33%). The phase predictor, history block colouring and consistency check use the new deck size.
+- Void Shield holds up to 2 charges. The exact count is read from Blizzard's Cooldown Manager when it shows the buff (never reading the secret stack value — only whether its text is secret), so a Penance proc landing on a single held charge is detected instead of recorded as unknown. Otherwise the count is inferred from Mind Blast (+1) and Void Shield casts (−1).
 - PW:S proc state now treats any non-proc texture as "no charge" rather than requiring the exact base icon, so a future icon change can't freeze the state.
 - The display refreshes immediately when the last charge is spent (`ACTIONBAR_SLOT_CHANGED`) instead of waiting for the next tick.
-- Debug window shows the current charge count on 12.1; the event log records charges per cast.
 
-Adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) v2.3.0. UI is unchanged.
+### Forecast frame
+- Four lights, one per card: **Charges · N+1 · N+2 · N+3**. The LAST-result light is replaced by the charges light.
+- The charges light is split in two halves (bottom = 1st charge, top = 2nd).
+- At 2 charges with a possible proc on the next Penance, the charges light plays Blizzard's action-bar proc glow as a reminder to spend a charge before the proc is wasted.
+- Debug window shows the charge count and N+3; the event log records charges per cast.
+
+Mechanics adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) v2.3.0.
 
 ---
 

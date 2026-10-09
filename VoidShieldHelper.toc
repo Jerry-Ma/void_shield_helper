@@ -1,4 +1,4 @@
-## Interface: 120007, 120100
+## Interface: 120100, 120105
 ## Version: @project-version@
 ## Title: VoidShieldHelper
 ## Notes: Tracks Penance casts and Void Shield procs for Disc Priest

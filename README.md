@@ -8,27 +8,26 @@ A lightweight indicator addon for **Discipline Priests** that predicts the proba
 
 Void Shield follows a deck mechanic: each group of Penance casts contains exactly one proc. VoidShieldHelper models this with parallel phase trackers (one per possible cycle offset). Each tracker independently maintains a probability distribution over the current group; invalid trackers are pruned as the history grows. The displayed probabilities are averaged across all still-valid trackers.
 
-The mechanic changed in 12.1; the addon detects the client and adapts — one download covers both:
+As of 12.1 (the addon requires 12.1 or later):
 
-| | 12.0.7 | 12.1 |
-|---|---|---|
-| Penance deck | 3 casts (33% each) | 4 casts (25% each) |
-| Proc charges held | 1 | up to 2 |
-| Proc sources | Penance | Penance + Mind Blast |
+- The Penance deck is **4 casts** (25% for the first card).
+- Void Shield holds **up to 2 charges**.
+- **Mind Blast** grants a charge outright. It never turns a deck card, so it doesn't affect the prediction.
 
-On 12.1 Mind Blast grants a charge outright — it never turns a deck card, so it doesn't affect the prediction.
+### Charge counting
 
-### Charge counting (12.1)
-
-12.0 made aura data "secret", so the addon can't read the buff's stack count directly. If **Blizzard's Cooldown Manager** is showing the Void Shield buff, the addon piggybacks on it to know the exact 1-vs-2 charge count, which lets it detect a Penance proc that lands while you already hold a charge. Without it, the count is inferred from your Mind Blast / Void Shield casts, and such a Penance is recorded as *unknown*. The debug window shows the current count and prefixes it with `~` in the fallback mode.
+12.0 made aura data "secret", so the addon can't read the buff's stack count directly. If **Blizzard's Cooldown Manager** is showing the Void Shield buff, the addon piggybacks on it to know the exact 1-vs-2 charge count, which lets it detect a Penance proc that lands while you already hold one charge. Without it, the count is inferred from your Mind Blast / Void Shield casts, and such a Penance is recorded as *unknown*. Either way, a Penance cast while holding 2 charges is *unknown*. The debug window shows the current count and prefixes it with `~` in the fallback mode.
 
 ### Forecast lights
 
+One light per card of the deck:
+
 | Light | Meaning |
 |-------|---------|
-| **LAST** | Result of your most recent Penance: cyan = proc, red = no proc, yellow = unknown |
-| **N+1** | Probability your *next* Penance will proc |
-| **N+2** | Probability the Penance *after that* will proc |
+| **Charges** | Split in two: bottom half lit = 1 charge, both lit = 2. Plays the action-bar **proc glow** when you're at 2 charges and the next Penance could proc — spend a charge first or that proc is wasted. |
+| **N+1** (large) | Probability your *next* Penance will proc |
+| **N+2** | Probability the Penance after that will proc |
+| **N+3** | Probability the Penance after *that* will proc |
 
 Colour scale: **cyan** (100% — will proc) → **green** (≥ 66%) → **yellow** (≥ 33%) → **orange** (< 33%) → **red** (0% — won't proc) → **grey** (not enough data)
 

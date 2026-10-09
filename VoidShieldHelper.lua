@@ -27,26 +27,19 @@ local PENANCE_SPELL_IDS = {
 local BASE_SLOT_TEXTURE = 135940
 local PROC_SLOT_TEXTURE = 7514191
 
--- ─── Game-version mechanics ──────────────────────────────────────────────────
--- 12.0.7 : Penance is a 3-card deck (33%), the proc holds 1 charge.
--- 12.1   : Penance is a 4-card deck (25%), the proc holds up to 2 charges, and
---          Mind Blast is a second, deterministic proc source.  Mind Blast does
---          NOT turn a deck card, so it never reaches the predictor.
-local DECK_SIZE, MAX_CHARGES
-do
-    local _, _, _, toc = GetBuildInfo()
-    toc = tonumber(toc) or 0
-    DECK_SIZE   = (toc >= 120100) and 4 or 3
-    MAX_CHARGES = (toc >= 120100) and 2 or 1
-end
+-- ─── Deck mechanics (12.1) ───────────────────────────────────────────────────
+-- Penance is a 4-card deck (25% per cast), the proc holds up to 2 charges, and
+-- Mind Blast is a second, deterministic proc source.  Mind Blast does NOT turn
+-- a deck card, so it never reaches the predictor.
+local DECK_SIZE   = 4
+local MAX_CHARGES = 2
 
 -- Casting the Void Shield variant of PW:S consumes one proc charge.
 local VOID_SHIELD_CAST_IDS = {
     [1253593] = true,
 }
 
--- Mind Blast grants a proc charge on 12.1.  Used only by the fallback charge
--- inference; ignored when MAX_CHARGES < 2.
+-- Mind Blast grants a proc charge.  Used only by the fallback charge inference.
 local MIND_BLAST_SPELL_IDS = {
     [8092] = true,
 }
@@ -230,41 +223,37 @@ local function advanceState(sf, minS, maxS, val)
     return sf + 1, newMin, newMax, true
 end
 
---- Returns the probability that the cast AFTER the next one will proc,
---- averaged across all currently valid phases.
+--- P(the cast `ahead` steps from now procs) for one phase state.  ahead = 1 is
+--- the next cast.  Branches on proc / no-proc for every intermediate cast,
+--- weighting each branch by its probability (at most 2^(ahead-1) leaves).
+local function probAheadForState(sf, minS, maxS, ahead)
+    local p1 = probForState(sf, minS, maxS)
+    if ahead <= 1 then return p1 end
+    local total = 0
+    if p1 > 0 then
+        local s, mn, mx, ok = advanceState(sf, minS, maxS, 1)
+        if ok then total = total + p1 * probAheadForState(s, mn, mx, ahead - 1) end
+    end
+    if p1 < 1 then
+        local s, mn, mx, ok = advanceState(sf, minS, maxS, 0)
+        if ok then total = total + (1 - p1) * probAheadForState(s, mn, mx, ahead - 1) end
+    end
+    return total
+end
+
+--- Returns the probability that the cast `ahead` steps from now will proc
+--- (2 = N+2, 3 = N+3), averaged across all currently valid phases.
 --- Returns nil if no valid phases exist.
-local function DeckPredictor_getProbNextNext(self)
-    local validPhases = {}
+local function DeckPredictor_getProbAhead(self, ahead)
+    local totalP, count = 0, 0
     for _, p in ipairs(self.phases) do
-        if p.isValid then validPhases[#validPhases + 1] = p end
-    end
-    if #validPhases == 0 then return nil end
-
-    local totalP = 0
-    for _, p in ipairs(validPhases) do
-        local sf, minS, maxS = p.slotsFilled, p.minSum, p.maxSum
-        local p1 = probForState(sf, minS, maxS)  -- P(N+1 = proc)
-        local p0 = 1 - p1                         -- P(N+1 = no-proc)
-
-        local prob2 = 0
-        -- Branch: N+1 is a proc
-        if p1 > 0 then
-            local sf1, min1, max1, valid1 = advanceState(sf, minS, maxS, 1)
-            if valid1 then
-                prob2 = prob2 + p1 * probForState(sf1, min1, max1)
-            end
+        if p.isValid then
+            count  = count + 1
+            totalP = totalP + probAheadForState(p.slotsFilled, p.minSum, p.maxSum, ahead)
         end
-        -- Branch: N+1 is not a proc
-        if p0 > 0 then
-            local sf0, min0, max0, valid0 = advanceState(sf, minS, maxS, 0)
-            if valid0 then
-                prob2 = prob2 + p0 * probForState(sf0, min0, max0)
-            end
-        end
-
-        totalP = totalP + prob2
     end
-    return totalP / #validPhases
+    if count == 0 then return nil end
+    return totalP / count
 end
 
 -- ─── Saved variables ─────────────────────────────────────────────────────────
@@ -496,7 +485,7 @@ local function pollShieldState()
     local tex = getCurrentSlotTexture()
     if tex == PROC_SLOT_TEXTURE then
         shieldActive = true
-        local n = MAX_CHARGES > 1 and readBlizzardStacks() or nil
+        local n = readBlizzardStacks()
         if n then
             blizzardCount = true
             chargeCount   = n
@@ -612,19 +601,19 @@ local function onPenanceCastStart(spellID)
 end
 
 --- Fallback charge inference for when the Cooldown Manager isn't providing an
---- exact count: Mind Blast adds a charge (12.1 only), casting the Void Shield
+--- exact count: Mind Blast adds a charge, casting the Void Shield
 --- variant of PW:S consumes one.  The texture (pollShieldState) stays the
 --- 0-vs-(>=1) anchor.  In this mode a Penance proc landing on an existing charge
 --- is invisible, so that cast is recorded UNKNOWN.
 local function onSpellSucceeded(spellID)
     if blizzardCount then return end
     if MIND_BLAST_SPELL_IDS[spellID] then
-        if MAX_CHARGES < 2 then return end
         if chargeCount < MAX_CHARGES then
             chargeCount  = chargeCount + 1
             shieldActive = true
             logEvent(string.format("MIND_BLAST charges=%d", chargeCount))
             updateDebugDisplay()
+            updateForecastDisplay()
         end
     elseif VOID_SHIELD_CAST_IDS[spellID] then
         if chargeCount > 0 then
@@ -632,20 +621,71 @@ local function onSpellSucceeded(spellID)
             shieldActive = chargeCount > 0
             logEvent(string.format("VOID_SHIELD cast charges=%d", chargeCount))
             updateDebugDisplay()
+            updateForecastDisplay()
         end
     end
 end
 
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
--- Three lights: [last cast result] [N+1 probability] [N+2 probability]
--- N+1 is the primary indicator (full size); LAST and N+2 are smaller.
+-- Four lights, one per card of the 4-cast deck:
+--   [charges] [N+1 probability] [N+2 probability] [N+3 probability]
+-- N+1 is the primary indicator (full size); the others are smaller.
+-- The charges light is split into a bottom half (1st charge) and a top half
+-- (2nd charge).  At the charge cap with a possible proc on the next cast it
+-- plays the standard action-button proc glow: spend a charge first, or the
+-- proc is wasted.
 -- Lights are bottom-aligned.
 -- Default sizes/gap; overridden by DB at runtime.
 local LIGHT_SIZE_MAIN_DEFAULT  = 24
 local LIGHT_SIZE_SMALL_DEFAULT = 16
 local LIGHT_GAP_DEFAULT        = 14
+local NUM_LIGHTS               = 4
 
--- Rebuild (or initially build) the three light frames inside forecastFrame.
+-- Blizzard's own proc-loop marching ants (the art the action bars use when a
+-- spell procs).  Played by a C-side FlipBook AnimationGroup, so it costs no
+-- Lua per frame.  The atlas has transparent padding baked in, hence the scale.
+local PROC_GLOW_ATLAS   = "UI-HUD-ActionBar-Proc-Loop-Flipbook"
+local PROC_GLOW_PADDING = 1.4
+
+local CHARGE_ON_R,  CHARGE_ON_G,  CHARGE_ON_B  = 0.0, 0.9, 0.9   -- cyan, same as a proc
+local CHARGE_OFF_R, CHARGE_OFF_G, CHARGE_OFF_B = 0.3, 0.3, 0.3   -- grey, same as no data
+
+--- Add the two charge halves and the proc glow to the charges light.
+local function buildChargeLight(light, size, texPath, inset)
+    -- The backdrop shows through the 1px gap between the halves.
+    light:SetBackdropColor(0, 0, 0, 1)
+    light.charges = {}
+    local halfH = (size - inset * 2 - 1) / 2
+    for i = 1, MAX_CHARGES do
+        local t = light:CreateTexture(nil, "ARTWORK")
+        t:SetTexture(texPath)
+        t:SetPoint("LEFT", light, "LEFT", inset, 0)
+        t:SetPoint("RIGHT", light, "RIGHT", -inset, 0)
+        t:SetHeight(halfH)
+        if i == 1 then
+            t:SetPoint("BOTTOM", light, "BOTTOM", 0, inset)
+        else
+            t:SetPoint("TOP", light, "TOP", 0, -inset)
+        end
+        light.charges[i] = t
+    end
+
+    local glow = light:CreateTexture(nil, "OVERLAY")
+    glow:SetAtlas(PROC_GLOW_ATLAS)
+    glow:SetSize(size * PROC_GLOW_PADDING, size * PROC_GLOW_PADDING)
+    glow:SetPoint("CENTER")
+    glow:Hide()
+    local ag = glow:CreateAnimationGroup()
+    ag:SetLooping("REPEAT")
+    local anim = ag:CreateAnimation("FlipBook")
+    anim:SetFlipBookRows(6)
+    anim:SetFlipBookColumns(5)
+    anim:SetFlipBookFrames(30)
+    anim:SetDuration(1.0)
+    light.glow, light.glowAnim = glow, ag
+end
+
+-- Rebuild (or initially build) the light frames inside forecastFrame.
 -- Tears down existing lights first so it can be called on settings change.
 local function rebuildLights(f)
     local db    = VoidShieldHelperDB or {}
@@ -665,27 +705,32 @@ local function rebuildLights(f)
     local padding = 8
     local sizes, xOffsets, topOffsets
 
+    -- charges (small) → N+1 (main) → N+2 (small) → N+3 (small)
+    sizes = { szSmall, szMain, szSmall, szSmall }
+    local span = 0
+    for i = 1, NUM_LIGHTS do span = span + sizes[i] end
+    span = span + gap * (NUM_LIGHTS - 1)
+    xOffsets, topOffsets = {}, {}
+
     if db.verticalLayout then
-        -- Vertical: small (top) → main (middle) → small (bottom), centered.
-        local frameW = szMain + padding * 2
-        local frameH = szSmall + gap + szMain + gap + szSmall + padding * 2
-        f:SetSize(frameW, frameH)
-        local xSmall = padding + (szMain - szSmall) / 2
-        sizes      = { szSmall, szMain, szSmall }
-        xOffsets   = { xSmall,  padding, xSmall }
-        topOffsets = { -padding,
-                       -(padding + szSmall + gap),
-                       -(padding + szSmall + gap + szMain + gap) }
+        -- Vertical: top to bottom, centered horizontally.
+        f:SetSize(szMain + padding * 2, span + padding * 2)
+        local y = -padding
+        for i = 1, NUM_LIGHTS do
+            xOffsets[i]   = padding + (szMain - sizes[i]) / 2
+            topOffsets[i] = y
+            y = y - sizes[i] - gap
+        end
     else
-        -- Horizontal: small (left) → main (center) → small (right), bottom-aligned.
-        local totalW = szSmall + gap + szMain + gap + szSmall
-        f:SetSize(totalW + padding * 2, szMain + padding * 2)
+        -- Horizontal: left to right, bottom-aligned.
+        f:SetSize(span + padding * 2, szMain + padding * 2)
         local bottomY = -(padding + szMain)
-        sizes      = { szSmall, szMain, szSmall }
-        xOffsets   = { padding,
-                       padding + szSmall + gap,
-                       padding + szSmall + gap + szMain + gap }
-        topOffsets = { bottomY + szSmall, -padding, bottomY + szSmall }
+        local x = padding
+        for i = 1, NUM_LIGHTS do
+            xOffsets[i]   = x
+            topOffsets[i] = bottomY + sizes[i]
+            x = x + sizes[i] + gap
+        end
     end
 
     -- Resolve light texture
@@ -701,7 +746,7 @@ local function rebuildLights(f)
     local lbg = db.lightBorderG or 0
     local lbb = db.lightBorderB or 0
 
-    for i = 1, 3 do
+    for i = 1, NUM_LIGHTS do
         local light = CreateFrame("Frame", nil, f, "BackdropTemplate")
         light:SetSize(sizes[i], sizes[i])
         light:SetPoint("TOPLEFT", f, "TOPLEFT", xOffsets[i], topOffsets[i])
@@ -715,6 +760,8 @@ local function rebuildLights(f)
         light:SetBackdropBorderColor(lbr, lbg, lbb, lba)
         f.lights[i] = light
     end
+    buildChargeLight(f.lights[1], sizes[1],
+        lightTexPath or "Interface\\Buttons\\WHITE8x8", math.max(0, lbs))
 end
 
 local function createForecastFrame()
@@ -805,28 +852,34 @@ end
 updateForecastDisplay = function()
     if not forecastFrame then return end
 
-    local prob1 = DeckPredictor_getProb(predictor)
-    local prob2 = DeckPredictor_getProbNextNext(predictor)
+    local lights = forecastFrame.lights
+    local prob1  = DeckPredictor_getProb(predictor)
 
-    -- Light 1 (LAST): cyan = proc, red = no-proc, grey = no data; UNKNOWN not expected
-    local lastResult = penanceHistory[1]
-    local lr, lg, lb
-    if lastResult == RESULT_PROC then
-        lr, lg, lb = 0.0, 0.9, 0.9   -- cyan
-    elseif lastResult == RESULT_NO_PROC then
-        lr, lg, lb = 0.9, 0.2, 0.2   -- red
-    elseif lastResult == RESULT_UNKNOWN then
-        lr, lg, lb = 0.9, 0.9, 0.1   -- yellow (fallback)
-    else
-        lr, lg, lb = 0.3, 0.3, 0.3   -- no data
+    -- Light 1: one half per charge held (bottom = 1st, top = 2nd).
+    local chargeLight = lights[1]
+    for i, half in ipairs(chargeLight.charges) do
+        if i <= chargeCount then
+            half:SetVertexColor(CHARGE_ON_R, CHARGE_ON_G, CHARGE_ON_B, 1)
+        else
+            half:SetVertexColor(CHARGE_OFF_R, CHARGE_OFF_G, CHARGE_OFF_B, 1)
+        end
     end
-    applyLight(forecastFrame.lights[1], lr, lg, lb)
 
-    -- Light 2 (N+1): probability color (cyan at 100%)
-    applyLight(forecastFrame.lights[2], probColor(prob1))
+    -- At the cap, a proc on the next Penance would be wasted: glow until a
+    -- charge is spent.
+    local capped = chargeCount >= MAX_CHARGES and prob1 ~= nil and prob1 > 0
+    if capped and not chargeLight.glowAnim:IsPlaying() then
+        chargeLight.glow:Show()
+        chargeLight.glowAnim:Play()
+    elseif not capped and chargeLight.glowAnim:IsPlaying() then
+        chargeLight.glowAnim:Stop()
+        chargeLight.glow:Hide()
+    end
 
-    -- Light 3 (N+2): probability color (cyan at 100%)
-    applyLight(forecastFrame.lights[3], probColor(prob2))
+    -- Lights 2-4 (N+1, N+2, N+3): probability color (cyan at 100%)
+    applyLight(lights[2], probColor(prob1))
+    applyLight(lights[3], probColor(DeckPredictor_getProbAhead(predictor, 2)))
+    applyLight(lights[4], probColor(DeckPredictor_getProbAhead(predictor, 3)))
 end
 -- ─── Debug UI ────────────────────────────────────────────────────────────────
 
@@ -942,15 +995,12 @@ end
 updateDebugDisplay = function()
     if not debugFrame then return end
 
-    -- Shield status (charge count on 12.1; pending indicator appended when a
-    -- check is in flight)
-    local status = shieldActive and "|cff00ff00ACTIVE|r" or "|cffff4444INACTIVE|r"
-    if MAX_CHARGES > 1 then
-        -- "~" marks a count inferred from casts rather than read from the
-        -- Cooldown Manager (kept short so the line fits with [checking...]).
-        status = status .. string.format(" %s%d/%d",
-            blizzardCount and "" or "|cff888888~|r", chargeCount, MAX_CHARGES)
-    end
+    -- Shield status with charge count ("~" marks a count inferred from casts
+    -- rather than read from the Cooldown Manager; kept short so the line fits
+    -- with the pending indicator appended while a check is in flight).
+    local status = string.format("%s %s%d/%d",
+        shieldActive and "|cff00ff00ACTIVE|r" or "|cffff4444INACTIVE|r",
+        blizzardCount and "" or "|cff888888~|r", chargeCount, MAX_CHARGES)
     if pendingCheck then
         status = status .. "  |cffffff00[checking...]|r"
     end
@@ -969,7 +1019,6 @@ updateDebugDisplay = function()
 
     -- Prediction probability
     local prob, validCount = DeckPredictor_getProb(predictor)
-    local prob2            = DeckPredictor_getProbNextNext(predictor)
     -- prob == nil should not occur here because recordResult auto-resets on break,
     -- but guard defensively anyway.
     if prob == nil then
@@ -989,14 +1038,17 @@ updateDebugDisplay = function()
         local breakSuffix = predictorBreakCount > 0
             and string.format(" |cffff8800[reset x%d]|r", predictorBreakCount)
             or ""
-        local next2Str = ""
-        if prob2 then
-            local pct2, c2 = pctColor(prob2)
-            next2Str = string.format("  N+2:%s%d%%|r", c2, pct2)
+        local aheadStr = ""
+        for ahead = 2, 3 do
+            local pa = DeckPredictor_getProbAhead(predictor, ahead)
+            if pa then
+                local pctA, cA = pctColor(pa)
+                aheadStr = aheadStr .. string.format("  N+%d:%s%d%%|r", ahead, cA, pctA)
+            end
         end
         debugFrame.probLabel:SetText(string.format(
             "N+1:%s%d%%|r%s",
-            c1, pct1, next2Str
+            c1, pct1, aheadStr
         ))
         debugFrame.phaseLabel:SetText(string.format(
             "|cff888888[%d %s]|r%s",
