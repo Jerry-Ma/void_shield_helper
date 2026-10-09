@@ -27,6 +27,38 @@ local PENANCE_SPELL_IDS = {
 local BASE_SLOT_TEXTURE = 135940
 local PROC_SLOT_TEXTURE = 7514191
 
+-- ─── Game-version mechanics ──────────────────────────────────────────────────
+-- 12.0.7 : Penance is a 3-card deck (33%), the proc holds 1 charge.
+-- 12.1   : Penance is a 4-card deck (25%), the proc holds up to 2 charges, and
+--          Mind Blast is a second, deterministic proc source.  Mind Blast does
+--          NOT turn a deck card, so it never reaches the predictor.
+local DECK_SIZE, MAX_CHARGES
+do
+    local _, _, _, toc = GetBuildInfo()
+    toc = tonumber(toc) or 0
+    DECK_SIZE   = (toc >= 120100) and 4 or 3
+    MAX_CHARGES = (toc >= 120100) and 2 or 1
+end
+
+-- Casting the Void Shield variant of PW:S consumes one proc charge.
+local VOID_SHIELD_CAST_IDS = {
+    [1253593] = true,
+}
+
+-- Mind Blast grants a proc charge on 12.1.  Used only by the fallback charge
+-- inference; ignored when MAX_CHARGES < 2.
+local MIND_BLAST_SPELL_IDS = {
+    [8092] = true,
+}
+
+-- Void Shield proc aura ("Master the Darkness").  Used only to find which
+-- Cooldown Manager item is ours via its non-secret config cooldownInfo.
+local VOID_SHIELD_AURA_ID = 1253591
+
+-- Blizzard Cooldown Manager buff viewers whose items render an exact stack
+-- count (see readBlizzardStacks).
+local COOLDOWN_VIEWER_FRAMES = { "BuffIconCooldownViewer", "BuffBarCooldownViewer" }
+
 -- Discrete colour thresholds.  Orange [0, THRESH_LO), yellow [THRESH_LO, THRESH_HI), green [THRESH_HI, 1].
 local THRESH_LO = 0.33
 local THRESH_HI = 0.66
@@ -71,23 +103,24 @@ local RESULT_UNKNOWN  = "UNKNOWN"   -- shield was already up at cast time
 
 -- ─── Deck predictor (Phase-State Filter) ────────────────────────────────────
 -- Models the "sampling without replacement" deck mechanic:
--- every 3 Penance casts contain exactly one Void Shield proc.
--- Three phases run in parallel to handle unknown deck-start offsets.
+-- every DECK_SIZE Penance casts contain exactly one Void Shield proc.
+-- DECK_SIZE phases run in parallel to handle unknown deck-start offsets.
 --
 -- Input values: 1 = PROC, 0 = NO_PROC, -1 = UNKNOWN (shield was already up)
 
 local function DeckPredictor_new()
-    -- Each phase represents a possible deck-start offset (0, 1, or 2 casts into a block).
+    -- Each phase represents a possible deck-start offset (0..DECK_SIZE-1 casts into a block).
     -- Casts before tracking began are injected as virtual unknowns (-1) so that the
     -- preceding partial block is handled correctly without special-casing.
     --
+    -- e.g. with a 3-card deck:
     -- offset=0: first cast is slot 0 of a new block  → 0 virtual unknowns
     -- offset=1: first cast is slot 2 of preceding block → 2 virtual unknowns
     -- offset=2: first cast is slot 1 of preceding block → 1 virtual unknown
-    -- Formula: virtualSlots = (3 - offset) % 3
+    -- Formula: virtualSlots = (DECK_SIZE - offset) % DECK_SIZE
     local phases = {}
-    for offset = 0, 2 do
-        local v = (3 - offset) % 3   -- virtual unknown slots to pre-inject
+    for offset = 0, DECK_SIZE - 1 do
+        local v = (DECK_SIZE - offset) % DECK_SIZE   -- virtual unknown slots to pre-inject
         phases[offset + 1] = {
             isValid     = true,
             minSum      = 0,  -- confirmed procs in current block
@@ -135,7 +168,7 @@ local function DeckPredictor_update(self, val)
             if p.minSum > 1 then
                 -- Too many confirmed procs in this block.
                 p.isValid = false
-            elseif p.slotsFilled == 2 then
+            elseif p.slotsFilled == DECK_SIZE - 1 then
                 -- End of block: the block must have been able to contain exactly one proc.
                 if p.maxSum == 0 then
                     p.isValid = false
@@ -162,7 +195,7 @@ local function DeckPredictor_getProb(self)
 
     local totalP = 0
     for _, p in ipairs(validPhases) do
-        local remaining = 3 - p.slotsFilled
+        local remaining = DECK_SIZE - p.slotsFilled
         local probPhi
         if p.minSum == 1 then
             probPhi = 0
@@ -180,7 +213,7 @@ end
 local function probForState(sf, minS, maxS)
     if minS == 1 then return 0 end
     local numUnknowns = maxS - minS
-    local remaining   = 3 - sf
+    local remaining   = DECK_SIZE - sf
     return 1.0 / (numUnknowns + remaining)
 end
 
@@ -190,7 +223,7 @@ local function advanceState(sf, minS, maxS, val)
     local newMin = minS + (val == 1 and 1 or 0)
     local newMax = maxS + (val == 1 and 1 or 0)
     if newMin > 1 then return 0, 0, 0, false end  -- too many procs
-    if sf == 2 then
+    if sf == DECK_SIZE - 1 then
         if newMax == 0 then return 0, 0, 0, false end  -- block ended with no proc possible
         return 0, 0, 0, true   -- block resets cleanly
     end
@@ -246,6 +279,9 @@ local watchSlot                = nil    -- cached action-bar slot for PW:S
 local iterationsUntilSlotRefresh = 0
 
 local shieldActive             = false  -- true when PROC_SLOT_TEXTURE is visible
+local chargeCount              = 0      -- active proc charges (0..MAX_CHARGES)
+local blizzardCount            = false  -- true when chargeCount came from the Cooldown Manager
+local cooldownIDCache          = nil    -- cached Cooldown Manager cooldownID for our proc
 
 -- Penance cast results (RESULT_PROC / RESULT_NO_PROC / RESULT_UNKNOWN), newest first.
 local penanceHistory           = {}
@@ -255,6 +291,7 @@ local penanceHistory           = {}
 -- function; its only external contract is calling recordResult(result).
 local pendingCheck             = false  -- true while the proc-check timer is live
 local shieldActiveOnCast       = false  -- shield snapshot taken at cast start
+local chargesOnCast            = 0      -- charge-count snapshot taken at cast start
 
 -- ─── Shared event log ────────────────────────────────────────────────────────
 -- Ring buffer of plain-text event strings for the copy-log popup, newest first.
@@ -281,7 +318,7 @@ local function verifyHistoryBlocks(convergedPhaseOffset)
     if n == 0 then return nil end
 
     -- virtualUnknowns = slots before the first real cast in the first partial block.
-    local virtualUnknowns = (3 - convergedPhaseOffset) % 3
+    local virtualUnknowns = (DECK_SIZE - convergedPhaseOffset) % DECK_SIZE
 
     -- Count PROCs per block.  History is newest-first, so we walk it backwards
     -- (index n = oldest cast, index 1 = newest cast).
@@ -289,7 +326,7 @@ local function verifyHistoryBlocks(convergedPhaseOffset)
     for histIdx = n, 1, -1 do
         local castIdx  = n - histIdx              -- 0-based, oldest = 0
         local absSlot  = castIdx + virtualUnknowns
-        local blockIdx = math.floor(absSlot / 3)  -- 0-based block number
+        local blockIdx = math.floor(absSlot / DECK_SIZE)  -- 0-based block number
 
         if penanceHistory[histIdx] == RESULT_PROC then
             blockProcs[blockIdx] = (blockProcs[blockIdx] or 0) + 1
@@ -363,15 +400,137 @@ end
 
 -- ─── Shield state polling ────────────────────────────────────────────────────
 
---- Update shieldActive from the current action-button texture.
+-- True if v is a 12.0 "secret value".  issecretvalue is the sanctioned way to
+-- ask WITHOUT using the value (comparisons/arithmetic on secrets throw).
+local function isSecret(v)
+    if issecretvalue then return issecretvalue(v) end
+    return false
+end
+
+--- Does a Cooldown Manager item's (config) cooldownInfo reference our proc spell?
+--- These are static data-table fields, not live combat data, so comparing them
+--- is not secret.
+local function cooldownInfoMatches(info)
+    if not info then return false end
+    if info.spellID == VOID_SHIELD_AURA_ID
+        or info.overrideSpellID == VOID_SHIELD_AURA_ID
+        or info.overrideTooltipSpellID == VOID_SHIELD_AURA_ID then
+        return true
+    end
+    local linked = info.linkedSpellIDs
+    if linked then
+        for _, id in ipairs(linked) do
+            if id == VOID_SHIELD_AURA_ID then return true end
+        end
+    end
+    return false
+end
+
+--- The Applications FontString for a Cooldown Manager item (icon vs bar layout).
+local function itemApplicationsFontString(itemFrame)
+    local iconField = itemFrame.Icon
+    if not iconField then return nil end
+    if iconField.GetObjectType and iconField:GetObjectType() == "Texture" then
+        return itemFrame.Applications and itemFrame.Applications.Applications  -- buff-icon item
+    end
+    return iconField.Applications                                              -- buff-bar item
+end
+
+--- Does this FontString currently render any text?
+--- Blizzard writes the stack count only when stacks > 1 (plain "" otherwise).
+--- The count is a secret we never read; the text merely BEING secret means a
+--- count was rendered, i.e. stacks > 1.  GetText is the only usable channel —
+--- layout metrics read secret regardless of content.
+--- Returns true/false, or nil if the probe threw.
+local function fontStringHasText(fs)
+    local ok, hasText = pcall(function()
+        local t = fs:GetText()
+        if isSecret(t) then return true end
+        return t ~= nil and t ~= ""
+    end)
+    if ok then return hasText end
+    return nil
+end
+
+--- Exact charge count piggybacked off Blizzard's Cooldown Manager, or nil when
+--- it can't be determined (item not tracked, or every probe hit a secret).
+local function readBlizzardStacksUnsafe()
+    if not (C_CooldownViewer and C_CooldownViewer.GetCooldownViewerCooldownInfo) then
+        return nil
+    end
+    for _, frameName in ipairs(COOLDOWN_VIEWER_FRAMES) do
+        local viewer = _G[frameName]
+        local pool = viewer and viewer.itemFramePool
+        if pool then
+            for itemFrame in pool:EnumerateActive() do
+                local cdID = itemFrame.cooldownID
+                if cdID and (cdID == cooldownIDCache
+                        or cooldownInfoMatches(C_CooldownViewer.GetCooldownViewerCooldownInfo(cdID))) then
+                    cooldownIDCache = cdID
+                    local appsFS = itemApplicationsFontString(itemFrame)
+                    local hasText = appsFS and fontStringHasText(appsFS)
+                    if appsFS == nil or hasText == nil then
+                        return nil
+                    end
+                    return hasText and MAX_CHARGES or 1
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function readBlizzardStacks()
+    local ok, n = pcall(readBlizzardStacksUnsafe)
+    if ok then return n end
+    return nil
+end
+
+--- Update shieldActive / chargeCount from the PW:S action-button texture (the
+--- authoritative 0-vs-(>=1) signal).  Only the PROC texture is matched: ANY
+--- other texture means no charge, so a base-icon change in a future patch
+--- degrades to "no charge" instead of freezing the state.  When a proc is up,
+--- 1-vs-2 is refined from the Cooldown Manager, else from event inference
+--- (onSpellSucceeded).
 local function pollShieldState()
     local tex = getCurrentSlotTexture()
     if tex == PROC_SLOT_TEXTURE then
         shieldActive = true
-    elseif tex == BASE_SLOT_TEXTURE then
-        shieldActive = false
+        local n = MAX_CHARGES > 1 and readBlizzardStacks() or nil
+        if n then
+            blizzardCount = true
+            chargeCount   = n
+        else
+            blizzardCount = false
+            if chargeCount < 1 then chargeCount = 1 end
+        end
+    elseif tex ~= nil then
+        shieldActive  = false
+        chargeCount   = 0
+        blizzardCount = false
     end
-    -- If tex is nil/unknown we keep the last known state.
+    -- If tex is nil we keep the last known state.
+end
+
+--- Classify the just-finished Penance by comparing post-cast state to the cast
+--- snapshot.  With an exact Cooldown Manager count the charge delta also catches
+--- a proc landing while a charge is already up (except at the cap); otherwise
+--- the binary texture can't see a new proc behind an existing one → UNKNOWN.
+local function classifyCast()
+    if blizzardCount then
+        if chargesOnCast >= MAX_CHARGES then
+            return RESULT_UNKNOWN
+        elseif chargeCount > chargesOnCast then
+            return RESULT_PROC
+        end
+        return RESULT_NO_PROC
+    end
+    if shieldActiveOnCast then
+        return RESULT_UNKNOWN
+    elseif shieldActive then
+        return RESULT_PROC
+    end
+    return RESULT_NO_PROC
 end
 
 -- ─── Penance cast handling ───────────────────────────────────────────────────
@@ -432,37 +591,49 @@ local function onPenanceCastStart(spellID)
         logEvent("CHANNEL_START while check pending; force-completing")
         pendingCheck = false
         pollShieldState()
-        local forceResult
-        if shieldActiveOnCast then
-            forceResult = RESULT_UNKNOWN
-        elseif shieldActive then
-            forceResult = RESULT_PROC
-        else
-            forceResult = RESULT_NO_PROC
-        end
-        recordResult(forceResult)
+        recordResult(classifyCast())
     end
     pendingCheck       = false
     pollShieldState()
     shieldActiveOnCast = shieldActive
-    logEvent(string.format("CHANNEL_START %d shield=%s", spellID,
-        shieldActive and "Y" or "N"))
+    chargesOnCast      = chargeCount
+    logEvent(string.format("CHANNEL_START %d shield=%s charges=%d%s", spellID,
+        shieldActive and "Y" or "N", chargeCount, blizzardCount and " (CDM)" or ""))
     pendingCheck = true
     C_Timer.After(getProcCheckDelay(), function()
         if not pendingCheck then return end
         pendingCheck = false
         pollShieldState()
-        local result
-        if shieldActiveOnCast then
-            result = RESULT_UNKNOWN
-        elseif shieldActive then
-            result = RESULT_PROC
-        else
-            result = RESULT_NO_PROC
-        end
+        local result = classifyCast()
+        logEvent(string.format("  -> %s charges=%d", result, chargeCount))
         recordResult(result)
     end)
     updateDebugDisplay()
+end
+
+--- Fallback charge inference for when the Cooldown Manager isn't providing an
+--- exact count: Mind Blast adds a charge (12.1 only), casting the Void Shield
+--- variant of PW:S consumes one.  The texture (pollShieldState) stays the
+--- 0-vs-(>=1) anchor.  In this mode a Penance proc landing on an existing charge
+--- is invisible, so that cast is recorded UNKNOWN.
+local function onSpellSucceeded(spellID)
+    if blizzardCount then return end
+    if MIND_BLAST_SPELL_IDS[spellID] then
+        if MAX_CHARGES < 2 then return end
+        if chargeCount < MAX_CHARGES then
+            chargeCount  = chargeCount + 1
+            shieldActive = true
+            logEvent(string.format("MIND_BLAST charges=%d", chargeCount))
+            updateDebugDisplay()
+        end
+    elseif VOID_SHIELD_CAST_IDS[spellID] then
+        if chargeCount > 0 then
+            chargeCount  = chargeCount - 1
+            shieldActive = chargeCount > 0
+            logEvent(string.format("VOID_SHIELD cast charges=%d", chargeCount))
+            updateDebugDisplay()
+        end
+    end
 end
 
 -- ─── Forecast UI ─────────────────────────────────────────────────────────────
@@ -771,16 +942,19 @@ end
 updateDebugDisplay = function()
     if not debugFrame then return end
 
-    -- Shield status (pending indicator appended when a check is in flight)
-    if shieldActive then
-        debugFrame.statusVal:SetText(pendingCheck
-            and "|cff00ff00ACTIVE|r  |cffffff00[checking...]|r"
-            or  "|cff00ff00ACTIVE|r")
-    else
-        debugFrame.statusVal:SetText(pendingCheck
-            and "|cffff4444INACTIVE|r  |cffffff00[checking...]|r"
-            or  "|cffff4444INACTIVE|r")
+    -- Shield status (charge count on 12.1; pending indicator appended when a
+    -- check is in flight)
+    local status = shieldActive and "|cff00ff00ACTIVE|r" or "|cffff4444INACTIVE|r"
+    if MAX_CHARGES > 1 then
+        -- "~" marks a count inferred from casts rather than read from the
+        -- Cooldown Manager (kept short so the line fits with [checking...]).
+        status = status .. string.format(" %s%d/%d",
+            blizzardCount and "" or "|cff888888~|r", chargeCount, MAX_CHARGES)
     end
+    if pendingCheck then
+        status = status .. "  |cffffff00[checking...]|r"
+    end
+    debugFrame.statusVal:SetText(status)
 
     -- PW:S slot info / warning
     if debugFrame.slotLabel then
@@ -833,12 +1007,12 @@ updateDebugDisplay = function()
     -- Determine which phase is the sole survivor (for position highlighting).
     -- When validCount == 1 the converged phase tells us which deck-slot each
     -- historical cast occupied, so we colour the #N label by slot alignment.
-    -- phases[1]=offset0, phases[2]=offset1, phases[3]=offset2 (by construction).
+    -- phases[k] = offset k-1 (by construction).
     local convergedPhaseOffset = nil
     if validCount == 1 then
         for idx, p in ipairs(predictor.phases) do
             if p.isValid then
-                convergedPhaseOffset = idx - 1  -- 0, 1, or 2
+                convergedPhaseOffset = idx - 1  -- 0..DECK_SIZE-1
                 break
             end
         end
@@ -872,8 +1046,8 @@ updateDebugDisplay = function()
                 -- Only colour entries the current predictor has processed.
                 local n          = math.min(#penanceHistory, predictorHistoryDepth)
                 local castIdx    = n - i                                    -- 0-based, oldest = 0
-                local virtualU   = (3 - convergedPhaseOffset) % 3
-                local blockIdx   = math.floor((castIdx + virtualU) / 3)     -- 0-based block number
+                local virtualU   = (DECK_SIZE - convergedPhaseOffset) % DECK_SIZE
+                local blockIdx   = math.floor((castIdx + virtualU) / DECK_SIZE)  -- 0-based block number
                 local blockColor = BLOCK_COLORS[(blockIdx % 2) + 1]
                 indexLabel = string.format("%s#%d|r", blockColor, i)
             else
@@ -1045,11 +1219,11 @@ local function tickUpdate()
         iterationsUntilSlotRefresh = 10  -- ~every 1 s at 0.1 s tick
     end
 
-    local prevShieldActive = shieldActive
+    local prevShieldActive, prevCharges = shieldActive, chargeCount
     pollShieldState()
     -- Only redraw when the shield state actually changed; avoids spamming
     -- font-string writes every 100 ms during idle play.
-    if shieldActive ~= prevShieldActive then
+    if shieldActive ~= prevShieldActive or chargeCount ~= prevCharges then
         updateDebugDisplay()
         updateForecastDisplay()
     end
@@ -1088,8 +1262,12 @@ local function resetState()
     predictorBreakCount        = 0
     predictorHistoryDepth      = 0
     shieldActive               = false
+    chargeCount                = 0
+    blizzardCount              = false
+    cooldownIDCache            = nil
     pendingCheck               = false
     shieldActiveOnCast         = false
+    chargesOnCast              = 0
     eventLog                   = {}
     watchSlot                  = nil
     iterationsUntilSlotRefresh = 0
@@ -1104,6 +1282,7 @@ eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 eventFrame:RegisterEvent("TRAIT_CONFIG_UPDATED")
 eventFrame:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")  -- detection algorithm
+eventFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")      -- fallback charge inference
 eventFrame:RegisterEvent("ACTIONBAR_SLOT_CHANGED")
 eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")        -- entered combat
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")         -- left combat
@@ -1182,7 +1361,10 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             predictorHistoryDepth = 0
             pendingCheck       = false
             shieldActiveOnCast = false
+            chargesOnCast      = 0
             shieldActive       = false
+            chargeCount        = 0
+            blizzardCount      = false
             watchSlot          = nil
         else
             -- Default: full reset on every zone transition.
@@ -1221,11 +1403,23 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             logEvent(string.format("CHANNEL_START %d (no match)", spellID))
         end
 
+    elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
+        if not isDiscPriest then return end
+        local unit, _, spellID = ...
+        if unit ~= "player" then return end
+        onSpellSucceeded(spellID)
+
     elseif event == "ACTIONBAR_SLOT_CHANGED" then
+        -- Spending the last charge swaps the PW:S icon, which fires this event;
+        -- refresh here rather than waiting for the next tick.
         local prevSlot = watchSlot
+        local prevShieldActive, prevCharges = shieldActive, chargeCount
         refreshWatchSlot()
-        if watchSlot ~= prevSlot then
+        pollShieldState()
+        if watchSlot ~= prevSlot or shieldActive ~= prevShieldActive
+            or chargeCount ~= prevCharges then
             updateDebugDisplay()
+            updateForecastDisplay()
         end
 
     elseif event == "PLAYER_REGEN_DISABLED" then

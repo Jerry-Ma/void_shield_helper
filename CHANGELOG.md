@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.0] - 2026-10-09
+
+### 12.1 support
+- Supports both 12.0.7 and 12.1 clients (`## Interface: 120007, 120100`); the mechanic is picked from the running client's build.
+- 12.1: Penance deck is 4 casts (25% per cast, was 3 / 33%). The phase predictor, history block colouring and consistency check now use the client's deck size instead of a hardcoded 3.
+- 12.1: Void Shield holds up to 2 charges. The exact count is read from Blizzard's Cooldown Manager when it shows the buff (never reading the secret stack value — only whether its text is secret), so a Penance proc landing on an existing charge is detected. Otherwise the count is inferred from Mind Blast (+1) and Void Shield casts (−1).
+- PW:S proc state now treats any non-proc texture as "no charge" rather than requiring the exact base icon, so a future icon change can't freeze the state.
+- The display refreshes immediately when the last charge is spent (`ACTIONBAR_SLOT_CHANGED`) instead of waiting for the next tick.
+- Debug window shows the current charge count on 12.1; the event log records charges per cast.
+
+Adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) v2.3.0. UI is unchanged.
+
+---
+
 ## [1.1.2] - 2026-05-08
 
 ### Bugfixes

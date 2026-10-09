@@ -6,7 +6,21 @@ A lightweight indicator addon for **Discipline Priests** that predicts the proba
 
 ## How it works
 
-Void Shield follows a deck mechanic: each group of 3 Penance casts contains exactly one proc. VoidShieldHelper models this with three parallel phase trackers (one per possible cycle offset). Each tracker independently maintains a probability distribution over the current group; invalid trackers are pruned as the history grows. The displayed probabilities are averaged across all still-valid trackers.
+Void Shield follows a deck mechanic: each group of Penance casts contains exactly one proc. VoidShieldHelper models this with parallel phase trackers (one per possible cycle offset). Each tracker independently maintains a probability distribution over the current group; invalid trackers are pruned as the history grows. The displayed probabilities are averaged across all still-valid trackers.
+
+The mechanic changed in 12.1; the addon detects the client and adapts — one download covers both:
+
+| | 12.0.7 | 12.1 |
+|---|---|---|
+| Penance deck | 3 casts (33% each) | 4 casts (25% each) |
+| Proc charges held | 1 | up to 2 |
+| Proc sources | Penance | Penance + Mind Blast |
+
+On 12.1 Mind Blast grants a charge outright — it never turns a deck card, so it doesn't affect the prediction.
+
+### Charge counting (12.1)
+
+12.0 made aura data "secret", so the addon can't read the buff's stack count directly. If **Blizzard's Cooldown Manager** is showing the Void Shield buff, the addon piggybacks on it to know the exact 1-vs-2 charge count, which lets it detect a Penance proc that lands while you already hold a charge. Without it, the count is inferred from your Mind Blast / Void Shield casts, and such a Penance is recorded as *unknown*. The debug window shows the current count and prefixes it with `~` in the fallback mode.
 
 ### Forecast lights
 
@@ -48,6 +62,7 @@ The addon also appears in the game's built-in **Addon Settings** panel (ESC → 
 
 ## Acknowledgements
 
+- 12.1 deck/charge support adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) by anozireth, a port of this addon.
 - Proc detection approach inspired by [Void Shield Proc Tracker](https://www.curseforge.com/wow/addons/void-shield-proc-tracker).
 - Void Shield deck mechanic explained in [this video](https://www.youtube.com/watch?v=X1Od3Ovp2i0).
 
