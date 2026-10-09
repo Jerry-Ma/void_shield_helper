@@ -1034,9 +1034,12 @@ local function createDebugFrame()
     optBtn:SetScript("OnClick", function()
         if VSH.toggleOptions then VSH.toggleOptions() end
     end)
+    f.optBtn = optBtn
 
+    -- Anchored to the frame corner, not the button, so it stays put while the
+    -- button is hidden by the lock.
     local hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    hint:SetPoint("RIGHT", optBtn, "LEFT", -6, 0)
+    hint:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -92, 11)
     hint:SetText("|cff888888/vsh|r")
 
     f:Show()
@@ -1192,7 +1195,8 @@ local function applySettings()
         end
     end
 
-    -- Lock / unlock dragging
+    -- Lock: fully click-through.  No dragging, and no mouse-enabled children
+    -- either (the debug window's Options button is hidden; /vsh still works).
     local locked = db.locked or false
     for _, f in ipairs({ forecastFrame, debugFrame }) do
         if f then
@@ -1200,6 +1204,7 @@ local function applySettings()
             f:EnableMouse(not locked)
         end
     end
+    if debugFrame then debugFrame.optBtn:SetShown(not locked) end
 
     -- LSM texture resolver (statusbar type = clean textures, no border artefacts)
     local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)

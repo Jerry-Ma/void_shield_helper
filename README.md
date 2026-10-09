@@ -54,7 +54,7 @@ The addon also appears in the game's built-in **Addon Settings** panel (ESC → 
 ## Options
 
 - Show/hide the debug window (cast history, phase state, raw probabilities)
-- Lock frames against accidental dragging
+- Lock frames: no dragging and fully click-through (the debug window's Options button is hidden; use `/vsh`)
 - Per-frame scale (0.5× – 2.0×): **Indicator Frame Scale** and **Debug Window Scale**
 - Smooth gradient vs. discrete probability colours (with live preview bar)
 - Per-frame background/border colour, size, and LibSharedMedia texture
