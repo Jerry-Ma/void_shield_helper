@@ -11,9 +11,9 @@
 
 ### Forecast frame
 - Four slots, one per card: **status · N+1 · N+2 · N+3**. The LAST-result light is replaced by the status slot.
-- The status slot holds one light per charge, stacked opposite to the layout (a column in the horizontal layout, a row in the vertical one).
+- The status slot holds one light per charge, splitting a configurable total width × height. They stack opposite to the main layout by default (a column in the horizontal layout, a row in the vertical one), or optionally the same way.
 - At 2 charges with a possible proc on the next Penance, the status lights play Blizzard's action-bar proc glow as a reminder to spend a charge before the proc is wasted.
-- New options: slot alignment (start / center / end), separate slot spacing and status stack spacing, and separate texture, size, colours and border for status lights. Options are reorganised into Layout, Prediction and Status tabs.
+- New options: slot alignment (start / center / end), separate slot spacing and status stack spacing, and separate texture, total width / height, stack direction, colours and border for status lights. Options are reorganised into Layout, Prediction and Status tabs.
 - Debug window shows the charge count, N+3, and whether the Cooldown Manager is tracking the Void Shield buff; the event log records charges per cast.
 
 Mechanics adapted from [Void Shield Tracker](https://github.com/anozireth/VoidShieldTracker) v2.3.0.

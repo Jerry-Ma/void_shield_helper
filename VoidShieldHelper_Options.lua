@@ -493,7 +493,7 @@ local optionsFrame = nil
 local function buildOptionsFrame()
     local SIDEBAR_W = 75
     local TOTAL_W   = SIDEBAR_W + PANEL_W  -- 375
-    local PANEL_H   = 542
+    local PANEL_H   = 590
     local TITLE_H   = 26
     local TAB_H     = 30
 
@@ -856,58 +856,68 @@ local function buildOptionsFrame()
     table.insert(widgets, wLBrdSz)
 
     -- ── Tab 5: Status lights (Void Shield charges) ───────────────────────────
-    -- Stacked across the layout axis: a column in the horizontal layout, a
-    -- row in the vertical one.
+    -- One light per charge, splitting the slot's total width x height.
     local pStatus = addTab("Status")
 
     sectionHeader(pStatus, "Texture", -10)
 
-    local wSTex = makeTextureDropdown(pStatus, "Light Texture (squares)", "statusbar", -28,
+    local wSTex = makeTextureDropdown(pStatus, "Light Texture", "statusbar", -28,
         function() return db.statusTexName or "" end,
         function(name) db.statusTexName = name; apply() end)
     table.insert(widgets, wSTex)
 
-    sectionHeader(pStatus, "Size & Spacing", -84)
+    sectionHeader(pStatus, "Size & Stacking  (all charges together)", -84)
 
-    local wSSz = makeSlider(pStatus, "Charge Light Size", 4, 40, 1, -102,
-        function() return db.statusSize or 11 end,
-        function(v) db.statusSize = math.floor(v+0.5); rebuild() end, "%d")
-    table.insert(widgets, wSSz)
+    local wSW = makeSlider(pStatus, "Total Width", 4, 60, 1, -102,
+        function() return db.statusWidth or 11 end,
+        function(v) db.statusWidth = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wSW)
 
-    local wSGap = makeSlider(pStatus, "Stack Spacing", 0, 20, 1, -154,
+    local wSH = makeSlider(pStatus, "Total Height", 4, 60, 1, -154,
+        function() return db.statusHeight or 24 end,
+        function(v) db.statusHeight = math.floor(v+0.5); rebuild() end, "%d")
+    table.insert(widgets, wSH)
+
+    local wSGap = makeSlider(pStatus, "Stack Spacing", 0, 20, 1, -206,
         function() return db.statusGap or 2 end,
         function(v) db.statusGap = math.floor(v+0.5); rebuild() end, "%d")
     table.insert(widgets, wSGap)
 
-    sectionHeader(pStatus, "Colours", -210)
+    local wSStack = makeChoice(pStatus, "Stack direction  (vs. main layout)", -258,
+        { { "opposite", "Opposite" }, { "same", "Same" } },
+        function() return db.statusStack or "opposite" end,
+        function(v) db.statusStack = v; rebuild() end)
+    table.insert(widgets, wSStack)
+
+    sectionHeader(pStatus, "Colours", -314)
 
     local sOnLbl = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    sOnLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -228)
+    sOnLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -332)
     sOnLbl:SetText("Charge Held"); sOnLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
     local sOffLbl = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    sOffLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 155, -228)
+    sOffLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 155, -332)
     sOffLbl:SetText("Empty"); sOffLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    table.insert(widgets, makeColorSwatch(pStatus, "", 10, -246, "statusOnR", "statusOnG", "statusOnB"))
-    table.insert(widgets, makeColorSwatch(pStatus, "", 155, -246, "statusOffR", "statusOffG", "statusOffB"))
+    table.insert(widgets, makeColorSwatch(pStatus, "", 10, -350, "statusOnR", "statusOnG", "statusOnB"))
+    table.insert(widgets, makeColorSwatch(pStatus, "", 155, -350, "statusOffR", "statusOffG", "statusOffB"))
 
-    sectionHeader(pStatus, "Border", -282)
+    sectionHeader(pStatus, "Border", -386)
 
     local sBrdLbl = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    sBrdLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -300)
+    sBrdLbl:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -404)
     sBrdLbl:SetText("Border Color"); sBrdLbl:SetTextColor(S.text[1], S.text[2], S.text[3])
 
-    local wSBrdSw = makeColorSwatch(pStatus, "", 10, -318, "statusBorderR", "statusBorderG", "statusBorderB", "statusBorderA")
+    local wSBrdSw = makeColorSwatch(pStatus, "", 10, -422, "statusBorderR", "statusBorderG", "statusBorderB", "statusBorderA")
     table.insert(widgets, wSBrdSw)
 
-    local wSBrdSz = makeSlider(pStatus, "Border Size  (0=hidden)", 0, 4, 1, -352,
+    local wSBrdSz = makeSlider(pStatus, "Border Size  (0=hidden)", 0, 4, 1, -456,
         function() return db.statusBorderSize or 1 end,
         function(v) db.statusBorderSize = math.floor(v+0.5); apply() end, "%d")
     table.insert(widgets, wSBrdSz)
 
     local sHint = pStatus:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    sHint:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -404)
+    sHint:SetPoint("TOPLEFT", pStatus, "TOPLEFT", 10, -508)
     sHint:SetWidth(PANEL_W - 20)
     sHint:SetJustifyH("LEFT")
     sHint:SetText("At 2 charges, when the next Penance could proc, the charge lights play the action-bar proc glow: spend a charge first.")

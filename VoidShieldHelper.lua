@@ -639,11 +639,12 @@ end
 -- The frame is a row (horizontal layout) or column (vertical layout) of four
 -- logical slots, one per card of the 4-cast deck:
 --   [status] [N+1] [N+2] [N+3]
--- Slot 1 holds the STATUS lights, one per Void Shield charge, stacked across
--- the layout axis: a column in the horizontal layout (1st charge at the
--- bottom), a row in the vertical one (1st charge on the left).  At the charge
--- cap with a possible proc on the next cast they play the action-bar proc
--- glow: spend a charge first, or that proc is wasted.
+-- Slot 1 holds the STATUS lights, one per Void Shield charge, splitting the
+-- slot's total width x height.  db.statusStack picks their direction relative
+-- to the main layout: "opposite" (default) stacks across it, "same" runs along
+-- it.  A column fills from the bottom, a row from the left.  At the charge cap
+-- with a possible proc on the next cast they play the action-bar proc glow:
+-- spend a charge first, or that proc is wasted.
 -- Slots 2-4 hold the PREDICTION lights; N+1 is the primary (full size).
 -- Every slot is aligned across the layout axis by db.lightAlign:
 --   "start" = top / left, "center", "end" = bottom / right.
@@ -651,8 +652,10 @@ end
 local LIGHT_SIZE_MAIN_DEFAULT  = 24
 local LIGHT_SIZE_SMALL_DEFAULT = 16
 local LIGHT_GAP_DEFAULT        = 14   -- between logical slots
-local STATUS_SIZE_DEFAULT      = 11
+local STATUS_WIDTH_DEFAULT     = 11   -- whole status slot, all charges
+local STATUS_HEIGHT_DEFAULT    = 24
 local STATUS_GAP_DEFAULT       = 2    -- between stacked status lights
+local STATUS_STACK_DEFAULT     = "opposite"
 local LIGHT_ALIGN_DEFAULT      = "end"
 local NUM_SLOTS                = 4
 local FRAME_PADDING            = 8
@@ -672,10 +675,10 @@ local function fetchStatusbar(name)
     return nil
 end
 
---- A square light: backdrop fill (tinted per update) plus a pixel border.
-local function makeLight(parent, size, texPath, borderSize, br, bg, bb, ba)
+--- A light: backdrop fill (tinted per update) plus a pixel border.
+local function makeLight(parent, w, h, texPath, borderSize, br, bg, bb, ba)
     local light = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    light:SetSize(size, size)
+    light:SetSize(w, h)
     light:SetBackdrop({
         bgFile   = texPath or WHITE_TEX,
         edgeFile = WHITE_TEX,
@@ -687,10 +690,10 @@ local function makeLight(parent, size, texPath, borderSize, br, bg, bb, ba)
     return light
 end
 
-local function addProcGlow(light, size)
+local function addProcGlow(light, w, h)
     local glow = light:CreateTexture(nil, "OVERLAY")
     glow:SetAtlas(PROC_GLOW_ATLAS)
-    glow:SetSize(size * PROC_GLOW_PADDING, size * PROC_GLOW_PADDING)
+    glow:SetSize(w * PROC_GLOW_PADDING, h * PROC_GLOW_PADDING)
     glow:SetPoint("CENTER")
     glow:Hide()
     local ag = glow:CreateAnimationGroup()
@@ -710,7 +713,8 @@ local function rebuildLights(f)
     local szMain   = db.lightSizeMain  or LIGHT_SIZE_MAIN_DEFAULT
     local szSmall  = db.lightSizeSmall or LIGHT_SIZE_SMALL_DEFAULT
     local gap      = db.lightGap       or LIGHT_GAP_DEFAULT
-    local szStat   = db.statusSize     or STATUS_SIZE_DEFAULT
+    local statW    = db.statusWidth    or STATUS_WIDTH_DEFAULT
+    local statH    = db.statusHeight   or STATUS_HEIGHT_DEFAULT
     local statGap  = db.statusGap      or STATUS_GAP_DEFAULT
     local align    = db.lightAlign     or LIGHT_ALIGN_DEFAULT
     local vertical = db.verticalLayout
@@ -724,11 +728,11 @@ local function rebuildLights(f)
     end
     f.slots, f.lights, f.statusLights = {}, {}, {}
 
-    -- Each slot's extent ALONG the layout axis and ACROSS it.  The status slot
-    -- is one light along, and the stack of status lights across.
-    local statusAcross = szStat * MAX_CHARGES + statGap * (MAX_CHARGES - 1)
-    local along  = { szStat,       szMain, szSmall, szSmall }
-    local across = { statusAcross, szMain, szSmall, szSmall }
+    -- Each slot's extent ALONG the layout axis and ACROSS it.
+    local statAlong, statAcross = statW, statH
+    if vertical then statAlong, statAcross = statH, statW end
+    local along  = { statAlong,  szMain, szSmall, szSmall }
+    local across = { statAcross, szMain, szSmall, szSmall }
     local span, crossMax = gap * (NUM_SLOTS - 1), 0
     for i = 1, NUM_SLOTS do
         span     = span + along[i]
@@ -765,26 +769,33 @@ local function rebuildLights(f)
     local lbs = db.lightBorderSize or 1
     local predTex = fetchStatusbar(db.lightTexName)
     for i = 2, NUM_SLOTS do
-        local light = makeLight(f.slots[i], along[i], predTex, lbs,
+        local light = makeLight(f.slots[i], along[i], along[i], predTex, lbs,
             db.lightBorderR or 0, db.lightBorderG or 0, db.lightBorderB or 0, db.lightBorderA or 1)
         light:SetPoint("TOPLEFT")
         f.lights[i - 1] = light
     end
 
-    -- Status lights stack inside slot 1: upward from the bottom in the
-    -- horizontal layout, rightward from the left in the vertical one.
+    -- Status lights split slot 1 (statW x statH) into one light per charge.
+    -- "opposite" stacks across the main layout, "same" runs along it; a
+    -- column fills upward from the bottom, a row rightward from the left.
+    local stackSame = (db.statusStack or STATUS_STACK_DEFAULT) == "same"
+    local column    = (stackSame and vertical) or (not stackSame and not vertical)
+    local stackLen  = column and statH or statW
+    local each      = math.max(1, (stackLen - statGap * (MAX_CHARGES - 1)) / MAX_CHARGES)
+    local lightW    = column and statW or each
+    local lightH    = column and each or statH
     local sbs = db.statusBorderSize or 1
     local statTex = fetchStatusbar(db.statusTexName)
     for i = 1, MAX_CHARGES do
-        local light = makeLight(f.slots[1], szStat, statTex, sbs,
+        local light = makeLight(f.slots[1], lightW, lightH, statTex, sbs,
             db.statusBorderR or 0, db.statusBorderG or 0, db.statusBorderB or 0, db.statusBorderA or 1)
-        local step = (i - 1) * (szStat + statGap)
-        if vertical then
-            light:SetPoint("TOPLEFT", f.slots[1], "TOPLEFT", step, 0)
-        else
+        local step = (i - 1) * (each + statGap)
+        if column then
             light:SetPoint("BOTTOMLEFT", f.slots[1], "BOTTOMLEFT", 0, step)
+        else
+            light:SetPoint("TOPLEFT", f.slots[1], "TOPLEFT", step, 0)
         end
-        addProcGlow(light, szStat)
+        addProcGlow(light, lightW, lightH)
         f.statusLights[i] = light
     end
 end
@@ -1426,8 +1437,11 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         if db.lightAlign        == nil then db.lightAlign        = "end" end
         -- Status (charge) lights
         if db.statusTexName     == nil then db.statusTexName     = ""   end
-        if db.statusSize        == nil then db.statusSize        = 11   end
+        if db.statusWidth       == nil then db.statusWidth       = 11   end
+        if db.statusHeight      == nil then db.statusHeight      = 24   end
         if db.statusGap         == nil then db.statusGap         = 2    end
+        if db.statusStack       == nil then db.statusStack       = "opposite" end
+        db.statusSize = nil  -- superseded by statusWidth / statusHeight
         if db.statusOnR         == nil then db.statusOnR         = 0    end
         if db.statusOnG         == nil then db.statusOnG         = 0.9  end
         if db.statusOnB         == nil then db.statusOnB         = 0.9  end

@@ -24,12 +24,12 @@ The frame has four slots, one per card of the deck: **[status] [N+1] [N+2] [N+3]
 
 | Slot | Meaning |
 |------|---------|
-| **Status** | One light per Void Shield charge, stacked across the layout (a column when horizontal, a row when vertical); lit = charge held. They play the action-bar **proc glow** when you're at 2 charges and the next Penance could proc — spend a charge first or that proc is wasted. |
+| **Status** | One light per Void Shield charge, splitting the slot's total width × height; lit = charge held. They stack opposite to the main layout by default (a column when horizontal, a row when vertical), or the same way. They play the action-bar **proc glow** when you're at 2 charges and the next Penance could proc — spend a charge first or that proc is wasted. |
 | **N+1** (large) | Probability your *next* Penance will proc |
 | **N+2** | Probability the Penance after that will proc |
 | **N+3** | Probability the Penance after *that* will proc |
 
-Layout options: horizontal or vertical, slot spacing, and slot alignment across the layout (start = top/left, center, end = bottom/right). Prediction and status lights each have their own texture, size, border and (for status) colours and stack spacing.
+Layout options: horizontal or vertical, slot spacing, and slot alignment across the layout (start = top/left, center, end = bottom/right). Prediction and status lights each have their own texture, size and border; status lights also have total width / height, stack direction, stack spacing and colours.
 
 Colour scale: **cyan** (100% — will proc) → **green** (≥ 66%) → **yellow** (≥ 33%) → **orange** (< 33%) → **red** (0% — won't proc) → **grey** (not enough data)
 
